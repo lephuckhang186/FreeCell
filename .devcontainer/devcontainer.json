@@ -1,0 +1,22 @@
+{
+  "name": "C++23 Template",
+  "image": "mcr.microsoft.com/devcontainers/cpp:1-ubuntu-22.04",
+  "features": {
+    "ghcr.io/devcontainers/features/gcc:1": {
+      "version": "12"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "cmake.buildArgs": ["-DCMAKE_CXX_STANDARD=23"],
+        "C_Cpp.default.cppStandard": "c++23"
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "twxs.cmake"
+      ]
+    }
+  },
+  "postCreateCommand": "g++ --version && clang++ --version"
+}
