@@ -1,0 +1,2 @@
+"""FreeCell package."""
+

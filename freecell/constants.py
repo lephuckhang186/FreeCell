@@ -1,0 +1,43 @@
+"""Centralized constants used by the whole game."""
+
+from __future__ import annotations
+
+# Window
+SCREEN_WIDTH = 1360
+SCREEN_HEIGHT = 820
+FPS = 120
+TITLE = "FreeCell (pygame)"
+
+# Card geometry
+CARD_WIDTH = 110
+CARD_HEIGHT = 150
+CARD_CORNER_RADIUS = 12
+TABLEAU_GAP_Y = 34
+
+# Global spacing and board layout
+OUTER_PADDING = 24
+TOP_ROW_Y = 36
+TABLEAU_Y = 230
+SLOT_GAP_X = 24
+
+# Color palette
+COLOR_BG = (17, 73, 48)
+COLOR_FELT_NOISE = (15, 67, 44)
+COLOR_PANEL = (10, 50, 34)
+COLOR_SLOT = (27, 95, 63)
+COLOR_SLOT_BORDER = (72, 161, 116)
+COLOR_CARD_FACE = (245, 244, 238)
+COLOR_CARD_BORDER = (60, 60, 60)
+COLOR_CARD_RED = (183, 32, 32)
+COLOR_CARD_BLACK = (25, 25, 25)
+COLOR_SHADOW = (0, 0, 0)
+COLOR_TEXT = (238, 245, 238)
+COLOR_HINT = (255, 224, 120)
+COLOR_WIN = (255, 255, 180)
+
+# Animation tuning
+DRAG_SMOOTH_FACTOR = 0.28
+DROP_ANIM_DURATION = 0.14
+SHADOW_ALPHA = 80
+DOUBLE_CLICK_SECONDS = 0.28
+
