@@ -156,12 +156,7 @@ def validate_move(state: GameState, src: PileRef, dst: PileRef, cards: list[Card
     return MoveResult(False, "Khong the dat len cot dich.")
 
 
-def apply_move(
-    state: GameState,
-    src: PileRef,
-    dst: PileRef,
-    start_index: int = -1,
-) -> tuple[MoveResult, list[Card]]:
+def apply_move(state: GameState, src: PileRef, dst: PileRef, start_index: int = -1,) -> tuple[MoveResult, list[Card]]:
     """Validate and apply move atomically. Returns moved cards when successful."""
     cards = pick_cards(state, src, start_index)
     check = validate_move(state, src, dst, cards)

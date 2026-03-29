@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from time import time
+import threading
+import threading
 
 import pygame
 
@@ -21,8 +23,9 @@ from .constants import (
 from .layout import BoardLayout
 from .rules import PileRef, PileType, apply_move, tableau_descending_alternating, validate_move
 from .models import Card, Suit
-from .state import GameState, deal_new_game
+from .state import GameState, deal_new_game, generate_state_testcase
 from .ui import Renderer
+from .algorithm import FreeCellSolver
 
 
 @dataclass(slots=True)
@@ -75,7 +78,7 @@ class FreeCellGame:
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = deal_new_game()
+        self.state: GameState = generate_state_testcase(2)
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -84,33 +87,36 @@ class FreeCellGame:
         self.last_click_at = 0.0
         self.status_text = ""
         self.status_until = 0.0
-        self.hint_targets: set[tuple[str, int]] = set()
-        self.hint_until = 0.0
+        self.solver_stats: dict | None = None
+        self._solver_thread: threading.Thread | None = None
+        self._solver_result: dict | None = None
+        self._solver_label: str = ""
         self.transition_anims: list[CardAnimation] = []
         self.auto_foundation_active = False
-        self.start_auto_foundation_chain()
+        self.solution_moves: list = []
 
     def set_status(self, message: str, seconds: float = 1.2) -> None:
         self.status_text = message
         self.status_until = time() + seconds
 
     def new_game(self) -> None:
-        self.state = deal_new_game()
+        self.state = generate_state_testcase(2)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None
         self.drop_anim = None
         self.status_text = ""
         self.status_until = 0.0
-        self.hint_targets.clear()
-        self.hint_until = 0.0
+        self.solver_stats = None
+        self._solver_thread = None
+        self._solver_result = None
         self.auto_foundation_active = False
         self.transition_anims.clear()
-        self.start_auto_foundation_chain()
+        self.solution_moves = []
 
     def action_buttons(self) -> list[tuple[str, pygame.Rect]]:
         """Buttons shown like common web FreeCell controls."""
-        labels = ["New", "Undo", "Hint"]
+        labels = ["New", "Undo"]
         width = 116
         height = 42
         gap = 10
@@ -120,20 +126,70 @@ class FreeCellGame:
         out: list[tuple[str, pygame.Rect]] = []
         for i, label in enumerate(labels):
             out.append((label, pygame.Rect(left + i * (width + gap), y, width, height)))
+            
+        # Add Solver buttons on top right
+        solver_labels = ["A*", "UCS", "IDS", "BFS"]
+        s_width = 56
+        s_height = 36
+        s_gap = 10
+        right = self.screen.get_width() - 16
+        s_y = 16
+        for i, label in enumerate(solver_labels):
+            out.append((label, pygame.Rect(right - (i + 1) * s_width - i * s_gap, s_y, s_width, s_height)))
+            
         return out
 
     def handle_button_click(self, pos: tuple[int, int]) -> bool:
         for label, rect in self.action_buttons():
             if not rect.collidepoint(pos):
                 continue
-            if "New" in label:
+            if self._solver_thread and self._solver_thread.is_alive():
+                self.set_status("Solver dang chay! Vui long doi...", 2.0)
+                return True
+            if label == "New":
                 self.new_game()
-            elif "Undo" in label:
+            elif label == "Undo":
                 self.undo()
-            else:
-                self.show_hint()
+            elif label in ["BFS", "IDS", "UCS", "A*"]:
+                self.run_solver(label)
             return True
         return False
+
+    def _run_solver_task(self, label: str, state_copy: GameState) -> None:
+        solver = FreeCellSolver(state_copy)
+        stats = None
+        
+        try:
+            if label == "BFS":
+                stats = solver.bfs_solving()
+            elif label == "IDS":
+                stats = solver.ids_solving()
+            elif label == "UCS":
+                stats = solver.ucs_solving()
+            elif label == "A*":
+                stats = solver.astar_solving()
+        except Exception:
+            pass
+            
+        self._solver_result = stats if stats is not None else {}
+
+    def run_solver(self, label: str) -> None:
+        if self._solver_thread and self._solver_thread.is_alive():
+            self.set_status("Solver dang chay, vui long doi!", 2.0)
+            return
+
+        self.set_status(f"Dang giai bang {label}... Vui long doi...", 100.0)
+        self._solver_result = None
+        self._solver_label = label
+        
+        # Deepcopy state passing to background thread to avoid conflict with main thread
+        state_copy = deepcopy(self.state)
+        self._solver_thread = threading.Thread(
+            target=self._run_solver_task,
+            args=(label, state_copy),
+            daemon=True
+        )
+        self._solver_thread.start()
 
     def push_undo_snapshot(self) -> None:
         self.undo_stack.append(deepcopy(self.state))
@@ -143,6 +199,7 @@ class FreeCellGame:
         if not self.undo_stack:
             self.set_status("Khong con nuoc de undo.")
             return
+        self.solution_moves.clear()
         old_state = deepcopy(self.state)
         self.redo_stack.append(deepcopy(self.state))
         self.state = self.undo_stack.pop()
@@ -155,6 +212,7 @@ class FreeCellGame:
         if not self.redo_stack:
             self.set_status("Khong co nuoc de redo.")
             return
+        self.solution_moves.clear()
         old_state = deepcopy(self.state)
         self.undo_stack.append(deepcopy(self.state))
         self.state = self.redo_stack.pop()
@@ -222,7 +280,7 @@ class FreeCellGame:
         return None
 
     def try_pick_from_pos(self, pos: tuple[int, int]) -> None:
-        if self.drop_anim:
+        if self.drop_anim or (self._solver_thread and self._solver_thread.is_alive()) or self.solution_moves or self.transition_anims:
             return
         # Free cells first
         for i, rect in enumerate(self.layout.free_cells):
@@ -354,12 +412,6 @@ class FreeCellGame:
                     return True
         return False
 
-    def start_auto_foundation_chain(self) -> None:
-        """Run auto-foundation one move at a time with tween animation."""
-        if self.drag or self.drop_anim:
-            return
-        self.auto_foundation_active = True
-
     def try_auto_move_from_source(self, src: PileRef, start_index: int) -> bool:
         cards = [self.state.tableau[src.index][-1]] if src.kind == PileType.TABLEAU else []
         if src.kind == PileType.FREECELL:
@@ -422,55 +474,6 @@ class FreeCellGame:
                     return True
         return False
 
-    def find_hint_move(self) -> tuple[PileRef, PileRef, int] | None:
-        # Prefer foundation move first.
-        for i, card in enumerate(self.state.free_cells):
-            if card is None:
-                continue
-            src = PileRef(PileType.FREECELL, i)
-            for f in range(4):
-                dst = PileRef(PileType.FOUNDATION, f)
-                if validate_move(self.state, src, dst, [card]).ok:
-                    return src, dst, -1
-
-        for col_idx, col in enumerate(self.state.tableau):
-            if not col:
-                continue
-            card = col[-1]
-            src = PileRef(PileType.TABLEAU, col_idx)
-            for f in range(4):
-                dst = PileRef(PileType.FOUNDATION, f)
-                if validate_move(self.state, src, dst, [card]).ok:
-                    return src, dst, len(col) - 1
-
-        # Otherwise suggest first legal single-card move to tableau/freecell.
-        for col_idx, col in enumerate(self.state.tableau):
-            if not col:
-                continue
-            card = col[-1]
-            src = PileRef(PileType.TABLEAU, col_idx)
-            for t in range(8):
-                dst = PileRef(PileType.TABLEAU, t)
-                if validate_move(self.state, src, dst, [card]).ok:
-                    return src, dst, len(col) - 1
-            for c in range(4):
-                dst = PileRef(PileType.FREECELL, c)
-                if validate_move(self.state, src, dst, [card]).ok:
-                    return src, dst, len(col) - 1
-        return None
-
-    def show_hint(self) -> None:
-        hint = self.find_hint_move()
-        if hint is None:
-            self.set_status("Khong tim thay nuoc di hop le.")
-            self.hint_targets.clear()
-            self.hint_until = 0.0
-            return
-        _, dst, _ = hint
-        self.hint_targets = {(dst.kind.value, dst.index)}
-        self.hint_until = time() + 1.6
-        self.set_status("Goi y da duoc highlight.")
-
     def release_drag(self, mouse_pos: tuple[int, int]) -> None:
         if not self.drag:
             return
@@ -506,11 +509,29 @@ class FreeCellGame:
             for i in range(8):
                 if validate_move(self.state, src, PileRef(PileType.TABLEAU, i), cards).ok:
                     targets.add(("tableau", i))
-        if time() <= self.hint_until:
-            targets.update(self.hint_targets)
         return targets
 
     def update(self, dt: float) -> None:
+        # Check if background solver finished
+        if self._solver_thread and not self._solver_thread.is_alive():
+            if self._solver_result is not None:
+                stats = self._solver_result
+                if stats and stats.get("path") is not None:
+                    self.solver_stats = stats
+                    self.solution_moves = stats["path"].copy()
+                    self.set_status(f"Giai xong voi {self._solver_label}! Dang choi thu...", 3.0)
+                else:
+                    self.set_status(f"{self._solver_label} khong the tim ra duong giai.", 3.0)
+                    self.solver_stats = None
+                self._solver_result = None
+            self._solver_thread = None
+
+        if self.solution_moves and not self.drop_anim and not self.transition_anims:
+            move = self.solution_moves.pop(0)
+            old_state = deepcopy(self.state)
+            apply_move(self.state, move[0], move[1], move[2])
+            self.start_state_transition_animation(old_state, self.state, duration=0.15)
+
         if self.drag:
             mx, my = pygame.mouse.get_pos()
             self.drag.target_x = mx - self.drag.offset_x
@@ -526,8 +547,6 @@ class FreeCellGame:
         if self.auto_foundation_active and not self.drop_anim and not self.drag:
             if not self.auto_move_once(animate=True):
                 self.auto_foundation_active = False
-        if self.hint_targets and time() > self.hint_until:
-            self.hint_targets.clear()
         if self.transition_anims:
             remaining: list[CardAnimation] = []
             for anim in self.transition_anims:
@@ -593,6 +612,24 @@ class FreeCellGame:
 
         if self.state.won:
             self.renderer.draw_win_overlay()
+            if self.solver_stats:
+                font = pygame.font.SysFont("segoeui", 28, bold=True)
+                stats = self.solver_stats
+                lines = [
+                    f"Search Time: {stats.get('search_time', 0):.4f}s",
+                    f"Expanded Nodes: {stats.get('expanded_nodes', 0)}",
+                    f"Search Length: {stats.get('search_length', 0)} moves",
+                    f"Memory Usage: {stats.get('memory_usage_bytes', 0)} bytes"
+                ]
+                if 'depth_reached' in stats:
+                    lines.append(f"Depth Reached: {stats['depth_reached']}")
+                
+                sy = self.screen.get_height() // 2 + 60
+                for line in lines:
+                    text_surface = font.render(line, True, (255, 255, 255))
+                    tw = text_surface.get_width()
+                    self.screen.blit(text_surface, (self.screen.get_width() // 2 - tw // 2, sy))
+                    sy += 36
 
         if self.status_text and time() <= self.status_until:
             font = pygame.font.SysFont("segoeui", 24, bold=True)
