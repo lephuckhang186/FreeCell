@@ -10,12 +10,41 @@ class FreeCellSolver:
     def __init__(self, initial_state: GameState):
         self.initial_state = initial_state
         
-    def hash_state(self, state: GameState):
-        tableau_tup = tuple(tuple(col) for col in state.tableau)
-        freecell_tup = tuple(state.free_cells)
-        foundation_tup = tuple(tuple(pile) for pile in state.foundations.values())
+    def hash_state(self, state: GameState) -> bytes:
+        # Tối ưu hóa: Biểu diễn trạng thái bằng dãy bytes siêu nhỏ gọn (chỉ ~60 bytes/state)
+        # Giảm cực kì nhiều RAM (từ tuple objects sang bytes) và chống sinh node trùng lặp
+        suit_idx = {"C": 0, "D": 1, "H": 2, "S": 3}
         
-        return (tableau_tup, freecell_tup, foundation_tup)
+        # 1. Foundation: Chỉ cần lưu rank lớn nhất của 4 chất (4 bytes)
+        f_bytes = []
+        for s in ("C", "D", "H", "S"):
+            pile = state.foundations.get(s, [])
+            f_bytes.append(pile[-1].rank if pile else 0)
+            
+        # 2. FreeCells: 4 bytes. Sắp xếp lại để triệt tiêu bài toán hoán vị (Symmetry Breaking)
+        fc_bytes = []
+        for c in state.free_cells:
+            if c is None:
+                fc_bytes.append(0)
+            else:
+                fc_bytes.append(suit_idx[c.suit.value] * 13 + c.rank)
+        fc_bytes.sort() # [12, 0, 4, 0] -> [0, 0, 4, 12] (Logical equivalent state)
+        
+        # 3. Tableau: Sắp xếp các cột để giảm số lượng hoán vị cột thừa thãi
+        tab_cols = []
+        for col in state.tableau:
+            col_b = bytearray()
+            for c in col:
+                col_b.append(suit_idx[c.suit.value] * 13 + c.rank)
+            tab_cols.append(bytes(col_b))
+        tab_cols.sort() # Cột giống nhau đứng tính là một state duy nhất
+        
+        tab_bytes = bytearray()
+        for b in tab_cols:
+            tab_bytes.extend(b)
+            tab_bytes.append(255) # Byte ngăn cách các cột
+            
+        return bytes(f_bytes + fc_bytes) + bytes(tab_bytes)
     
     def is_win_state(self, state: GameState) -> bool:
         return sum(len(pile) for pile in state.foundations.values()) == 52
