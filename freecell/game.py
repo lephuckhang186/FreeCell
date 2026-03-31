@@ -78,7 +78,7 @@ class FreeCellGame:
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = generate_state_testcase(2)
+        self.state: GameState = generate_state_testcase(1)
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -100,7 +100,7 @@ class FreeCellGame:
         self.status_until = time() + seconds
 
     def new_game(self) -> None:
-        self.state = generate_state_testcase(2)
+        self.state = generate_state_testcase(1)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None
@@ -433,7 +433,6 @@ class FreeCellGame:
                 res, moved_cards = apply_move(self.state, src, dst, start_index)
                 if res.ok:
                     self.start_drop_animation(moved_cards, dst, sx, sy)
-                    self.start_auto_foundation_chain()
                     return True
 
         # 2) For card already in free cell, try dropping into a tableau column first.
@@ -493,7 +492,6 @@ class FreeCellGame:
             return
 
         self.start_drop_animation(drag.cards, dst, drag.smooth_x, drag.smooth_y)
-        self.start_auto_foundation_chain()
 
     def collect_highlight_targets(self) -> set[tuple[str, int]]:
         targets: set[tuple[str, int]] = set()
