@@ -126,6 +126,44 @@ class FreeCellSolver:
         search_time = time.time() - start_time
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
     
+    def dfs_solving(self):
+        """Depth-First Search — stack-based with visited set to avoid cycles."""
+        start_time = time.time()
+        expanded_nodes = 0
+
+        stack = [(self.initial_state, [])]
+        visited = set()
+        visited.add(self.hash_state(self.initial_state))
+
+        while stack:
+            if expanded_nodes % 2000 == 0:
+                time.sleep(0.001)  # Yield GIL cho giao dien pygame
+
+            current_state, path = stack.pop()
+            expanded_nodes += 1
+
+            if self.is_win_state(current_state):
+                search_time = time.time() - start_time
+                memory_usage = sys.getsizeof(visited) + sys.getsizeof(stack)
+                return {
+                    "path": path,
+                    "search_time": search_time,
+                    "expanded_nodes": expanded_nodes,
+                    "search_length": len(path),
+                    "memory_usage_bytes": memory_usage,
+                }
+
+            for move in self.get_all_possible_move(current_state):
+                new_state = deepcopy(current_state)
+                apply_move(new_state, move[0], move[1], move[2])
+                state_hash = self.hash_state(new_state)
+                if state_hash not in visited:
+                    visited.add(state_hash)
+                    stack.append((new_state, path + [move]))
+
+        search_time = time.time() - start_time
+        return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
+
     def ids_solving(self, max_depth: int = 100):
         start_time = time.time()
         expanded_nodes = 0

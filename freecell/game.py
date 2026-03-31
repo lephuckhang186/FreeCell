@@ -94,6 +94,12 @@ class FreeCellGame:
         self.transition_anims: list[CardAnimation] = []
         self.auto_foundation_active = False
         self.solution_moves: list = []
+        # UI state
+        self.game_id: int = 3953522
+        self.score: int = 0
+        self.elapsed: float = 0.0
+        self.pressed_button_label: str = ""
+        self.pressed_button_until: float = 0.0
 
     def set_status(self, message: str, seconds: float = 1.2) -> None:
         self.status_text = message
@@ -113,64 +119,71 @@ class FreeCellGame:
         self.auto_foundation_active = False
         self.transition_anims.clear()
         self.solution_moves = []
+        self.score = 0
+        self.elapsed = 0.0
+        self.pressed_button_label = ""
+        self.pressed_button_until = 0.0
+
+    def add_score(self, delta: int) -> None:
+        """Add delta to score, clamped to >= 0."""
+        self.score = max(0, self.score + delta)
 
     def action_buttons(self) -> list[tuple[str, pygame.Rect]]:
-        """Buttons shown like common web FreeCell controls."""
-        labels = ["New", "Undo"]
-        width = 116
-        height = 42
-        gap = 10
-        total = len(labels) * width + (len(labels) - 1) * gap
-        left = max(16, (self.screen.get_width() - total) // 2)
-        y = self.screen.get_height() - height - 14
+        """Bottom toolbar: [New][Undo][Hint][DFS][BFS][UCS][A*] left | [More] right."""
+        W = self.screen.get_width()
+        btn_h = 46
+        y = self.screen.get_height() - btn_h - 14
+
+        # Left group — wider buttons with generous gap
+        specs = [("New", 106), ("Undo", 114), ("Hint", 100),
+                 ("DFS", 88), ("BFS", 88), ("UCS", 88), ("A*", 76)]
+        gap = 12
+        x = 14
         out: list[tuple[str, pygame.Rect]] = []
-        for i, label in enumerate(labels):
-            out.append((label, pygame.Rect(left + i * (width + gap), y, width, height)))
-            
-        # Add Solver buttons on top right
-        solver_labels = ["A*", "UCS", "IDS", "BFS"]
-        s_width = 56
-        s_height = 36
-        s_gap = 10
-        right = self.screen.get_width() - 16
-        s_y = 16
-        for i, label in enumerate(solver_labels):
-            out.append((label, pygame.Rect(right - (i + 1) * s_width - i * s_gap, s_y, s_width, s_height)))
-            
+        for label, w in specs:
+            out.append((label, pygame.Rect(x, y, w, btn_h)))
+            x += w + gap
+
+        # Right: More
+        more_w = 106
+        out.append(("More", pygame.Rect(W - more_w - 14, y, more_w, btn_h)))
         return out
 
     def handle_button_click(self, pos: tuple[int, int]) -> bool:
         for label, rect in self.action_buttons():
             if not rect.collidepoint(pos):
                 continue
-            if self._solver_thread and self._solver_thread.is_alive():
-                self.set_status("Solver dang chay! Vui long doi...", 2.0)
-                return True
+            # Visual press effect — show highlight for 0.12s
+            self.pressed_button_label = label
+            self.pressed_button_until = time() + 0.12
             if label == "New":
                 self.new_game()
             elif label == "Undo":
                 self.undo()
-            elif label in ["BFS", "IDS", "UCS", "A*"]:
-                self.run_solver(label)
+            elif label in ("DFS", "BFS", "UCS", "A*"):
+                if self._solver_thread and self._solver_thread.is_alive():
+                    self.set_status("Solver dang chay! Vui long doi...", 2.0)
+                else:
+                    self.run_solver(label)
+            elif label in ("Hint", "More"):
+                pass  # chưa có chức năng
             return True
         return False
 
     def _run_solver_task(self, label: str, state_copy: GameState) -> None:
         solver = FreeCellSolver(state_copy)
         stats = None
-        
         try:
             if label == "BFS":
                 stats = solver.bfs_solving()
-            elif label == "IDS":
-                stats = solver.ids_solving()
+            elif label == "DFS":
+                stats = solver.dfs_solving()
             elif label == "UCS":
                 stats = solver.ucs_solving()
             elif label == "A*":
                 stats = solver.astar_solving()
         except Exception:
             pass
-            
         self._solver_result = stats if stats is not None else {}
 
     def run_solver(self, label: str) -> None:
@@ -203,6 +216,7 @@ class FreeCellGame:
         old_state = deepcopy(self.state)
         self.redo_stack.append(deepcopy(self.state))
         self.state = self.undo_stack.pop()
+        self.add_score(-5)   # penalty for undo
         self.start_state_transition_animation(old_state, self.state)
         self.drag = None
         self.drop_anim = None
@@ -432,6 +446,7 @@ class FreeCellGame:
                 sx, sy = self.card_source_position(src, start_index)
                 res, moved_cards = apply_move(self.state, src, dst, start_index)
                 if res.ok:
+                    self.add_score(5 * len(moved_cards))  # +5 per card (double-click)
                     self.start_drop_animation(moved_cards, dst, sx, sy)
                     return True
 
@@ -484,12 +499,16 @@ class FreeCellGame:
             return
 
         self.push_undo_snapshot()
-        result, _ = apply_move(self.state, drag.src, dst, drag.start_index)
+        result, moved_cards = apply_move(self.state, drag.src, dst, drag.start_index)
         if not result.ok:
             if self.undo_stack:
                 self.undo_stack.pop()
             self.set_status(result.reason)
             return
+
+        # Scoring: +10 per card moved to foundation
+        if dst.kind == PileType.FOUNDATION:
+            self.add_score(10 * len(moved_cards))
 
         self.start_drop_animation(drag.cards, dst, drag.smooth_x, drag.smooth_y)
 
@@ -510,6 +529,10 @@ class FreeCellGame:
         return targets
 
     def update(self, dt: float) -> None:
+        # Advance game timer
+        if not self.state.won:
+            self.elapsed += dt
+
         # Check if background solver finished
         if self._solver_thread and not self._solver_thread.is_alive():
             if self._solver_result is not None:
@@ -557,6 +580,7 @@ class FreeCellGame:
 
     def draw(self) -> None:
         self.renderer.draw_background()
+        self.renderer.draw_header(self.score, self.elapsed)
         self.renderer.draw_static_board(self.layout, self.state, highlight_targets=self.collect_highlight_targets())
 
         hidden_tableau = None
@@ -634,7 +658,10 @@ class FreeCellGame:
             msg = font.render(self.status_text, True, (255, 216, 120))
             self.screen.blit(msg, (24, self.screen.get_height() - 68))
 
-        self.renderer.draw_action_buttons(self.action_buttons())
+        self.renderer.draw_action_buttons(
+            self.action_buttons(),
+            pressed=self.pressed_button_label if time() <= self.pressed_button_until else "",
+        )
         pygame.display.flip()
 
     def run(self) -> None:
