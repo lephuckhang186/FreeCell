@@ -136,7 +136,7 @@ class FreeCellGame:
 
         # Left group — wider buttons with generous gap
         specs = [("New", 106), ("Undo", 114), ("Hint", 100),
-                 ("DFS", 88), ("BFS", 88), ("UCS", 88), ("A*", 76)]
+                 ("IDS", 88), ("BFS", 88), ("UCS", 88), ("A*", 76)]
         gap = 12
         x = 14
         out: list[tuple[str, pygame.Rect]] = []
@@ -160,7 +160,7 @@ class FreeCellGame:
                 self.new_game()
             elif label == "Undo":
                 self.undo()
-            elif label in ("DFS", "BFS", "UCS", "A*"):
+            elif label in ("IDS", "BFS", "UCS", "A*"):
                 if self._solver_thread and self._solver_thread.is_alive():
                     self.set_status("Solver dang chay! Vui long doi...", 2.0)
                 else:
@@ -176,8 +176,8 @@ class FreeCellGame:
         try:
             if label == "BFS":
                 stats = solver.bfs_solving()
-            elif label == "DFS":
-                stats = solver.dfs_solving()
+            elif label == "IDS":
+                stats = solver.ids_solving()
             elif label == "UCS":
                 stats = solver.ucs_solving()
             elif label == "A*":
