@@ -15,37 +15,41 @@ class MoveCostConfig:
     def __init__(self, algorithm='ucs'):
         self.algorithm = algorithm  # 'ucs' hoặc 'astar'
         
-        # Base cost và epsilon
-        self.BASE_COST = 1.0
-        
-        # Epsilon cho UCS (rất nhỏ để đảm bảo tối ưu số bước)
-        self.UCS_EPSILON = 0.001
-        
-        # Epsilon cho A* (lớn hơn để định hướng mạnh hơn)
-        self.ASTAR_EPSILON = 0.01
-        
-        # Penalty/Reward weights
         if algorithm == 'ucs':
-            self.FC_PENALTY_BASE = 0.001
-            self.FC_PENALTY_PER_EMPTY = 0.0005
-            self.FOUNDATION_REWARD = 0.0005
-            self.EMPTY_COLUMN_REWARD = 0.001
-            self.FREECELL_RELEASE_REWARD = 0.0005
-            self.NATURAL_MOVE_REWARD = 0.0005
-            self.FOUNDATION_SRC_PENALTY = 0.002
+            # ===== UCS: Cost phản ánh CHIẾN LƯỢC, KHÔNG phải số bước =====
+            self.BASE_COST = 10.0      # Base lớn để có độ phân giải
+            self.EPSILON = 0.001
+            self.MIN_COST = 0.1
+            
+            # Penalty/Reward weights - TẠO KHÁC BIỆT RÕ
+            self.FC_PENALTY_BASE = 8.0      # Phạt nặng khi dùng freecell
+            self.FC_PENALTY_PER_EMPTY = 3.0  # Càng nhiều freecell trống càng phạt
+            self.FOUNDATION_REWARD = 15.0    # Đảm bảo Foundation luôn là rẻ nhất (sẽ bị kẹp về MIN_COST = 0.1)
+            self.EMPTY_COLUMN_REWARD = 1.0   # Giảm reward cột trống để không rẻ hơn Foundation
+            self.FREECELL_RELEASE_REWARD = 3.0  # Thưởng giải phóng freecell
+            self.NATURAL_MOVE_REWARD = 2.0   # Thưởng nước đi tự nhiên
+            self.FOUNDATION_SRC_PENALTY = 15.0  # Phạt rất nặng khi lấy bài từ foundation
+            
         else:  # astar
-            self.FC_PENALTY_BASE = 0.01
-            self.FC_PENALTY_PER_EMPTY = 0.005
+            # ===== A*: Cost ≈ SỐ BƯỚC, chỉ điều chỉnh nhẹ để định hướng =====
+            self.BASE_COST = 1.0
+            self.EPSILON = 0.001
+            self.MIN_COST = 0.001
+            
+            # Penalty/Reward weights - CHỈ ĐIỀU CHỈNH NHẸ
+            self.FC_PENALTY_BASE = 0.02
+            self.FC_PENALTY_PER_EMPTY = 0.01
             self.FOUNDATION_REWARD = 0.05
-            self.EMPTY_COLUMN_REWARD = 0.02
-            self.FREECELL_RELEASE_REWARD = 0.01
+            self.EMPTY_COLUMN_REWARD = 0.03
+            self.FREECELL_RELEASE_REWARD = 0.02
             self.NATURAL_MOVE_REWARD = 0.01
             self.FOUNDATION_SRC_PENALTY = 0.1
     
     def get_epsilon(self):
-        if self.algorithm == 'ucs':
-            return self.UCS_EPSILON
-        return self.ASTAR_EPSILON
+        return self.EPSILON
+     
+    def get_min_cost(self):
+        return self.MIN_COST
 
 
 class FreeCellSolver: 
@@ -349,7 +353,7 @@ class FreeCellSolver:
         
         # === 5. Đặc biệt cho UCS: phạt nhẹ nước đi vô ích ===
         if config.algorithm == 'ucs' and self._is_useless_move(current_state, src, dst, start_index):
-            cost += config.UCS_EPSILON * 0.5
+            cost += config.EPSILON * 0.5
         
         # Đảm bảo cost > 0 và không quá lớn
         min_cost = config.get_epsilon()
@@ -397,30 +401,34 @@ class FreeCellSolver:
         # Priority Queue lưu: (cost, tie_breaker, state, path)
         count = 0
         queue = [(0.0, count, self.initial_state, [])]
-        visited = set()
+        best_cost = {self.hash_state(self.initial_state): 0.0}  # Lưu chi phí tốt nhất đến mỗi state
+
+        # Dùng một config duy nhất để tính điểm
+        config = MoveCostConfig('ucs')
         
         while queue:
             if expanded_nodes % 2000 == 0:
-                time.sleep(0.001)  # Yield GIL cho giao dien pygame
-                
-            cost, _, current_state, path = heapq.heappop(queue)
+                time.sleep(0.001)
             
+            cost, _, current_state, path = heapq.heappop(queue)
             state_hash = self.hash_state(current_state)
-            if state_hash in visited:
+            
+            # Bỏ qua nếu đã có đường đi tốt hơn
+            if state_hash in best_cost and best_cost[state_hash] < cost - 0.001:
                 continue
-            visited.add(state_hash)
             
             expanded_nodes += 1
             self._report_stats("UCS", start_time, expanded_nodes, len(queue), len(path))
             
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
-                memory_usage = sys.getsizeof(visited) + sys.getsizeof(queue)
+                memory_usage = sys.getsizeof(best_cost) + sys.getsizeof(queue)
                 return {
                     "path": path,
                     "search_time": search_time,
                     "expanded_nodes": expanded_nodes,
                     "search_length": len(path),
+                    "total_cost": cost,
                     "memory_usage_bytes": memory_usage
                 }
             
@@ -428,16 +436,20 @@ class FreeCellSolver:
                 new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
                 
-                if self.hash_state(new_state) not in visited:
+                new_hash = self.hash_state(new_state)
+                
+                # Tính cost cho nước đi
+                move_cost = self.get_move_cost(current_state, move, config)
+                new_cost = cost + move_cost
+                
+                # Chỉ thêm nếu tìm được đường đi tốt hơn
+                if new_hash not in best_cost or new_cost < best_cost[new_hash] - 0.001:
+                    best_cost[new_hash] = new_cost
                     count += 1
-                    # Gốc UCS bằng 1, ở đây áp dụng cost function động
-                    config = MoveCostConfig('ucs')
-                    move_cost = self.get_move_cost(current_state, move, config)
-                    heapq.heappush(queue, (cost + move_cost, count, new_state, path + [move]))
-            
-        search_time = time.time() - start_time
-        return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
+                    heapq.heappush(queue, (new_cost, count, new_state, path + [move]))
         
+        return {"path": None, "search_time": time.time() - start_time, "expanded_nodes": expanded_nodes}
+            
     
     def heuristic(self, state: GameState) -> int:
         # 1. Cơ bản nhất: Số lá bài còn lại chưa được đưa lên Foundation
@@ -481,6 +493,7 @@ class FreeCellSolver:
         start_h = self.heuristic(self.initial_state)
         queue = [(start_h, count, 0.0, self.initial_state, [])]
         visited = set()
+        config = MoveCostConfig('astar')
         
         while queue:
             if expanded_nodes % 2000 == 0:
@@ -513,7 +526,6 @@ class FreeCellSolver:
                 
                 if self.hash_state(new_state) not in visited:
                     count += 1
-                    config = MoveCostConfig('astar')
                     move_cost = self.get_move_cost(current_state, move, config)
                     new_g = g_cost + move_cost
                     new_h = self.heuristic(new_state)
