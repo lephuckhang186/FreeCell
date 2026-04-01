@@ -10,6 +10,44 @@ DEBUG_STATS = True
 REPORT_INTERVAL = 1000
 
 
+class MoveCostConfig:
+    """Cấu hình cho move_cost function."""
+    def __init__(self, algorithm='ucs'):
+        self.algorithm = algorithm  # 'ucs' hoặc 'astar'
+        
+        # Base cost và epsilon
+        self.BASE_COST = 1.0
+        
+        # Epsilon cho UCS (rất nhỏ để đảm bảo tối ưu số bước)
+        self.UCS_EPSILON = 0.001
+        
+        # Epsilon cho A* (lớn hơn để định hướng mạnh hơn)
+        self.ASTAR_EPSILON = 0.01
+        
+        # Penalty/Reward weights
+        if algorithm == 'ucs':
+            self.FC_PENALTY_BASE = 0.001
+            self.FC_PENALTY_PER_EMPTY = 0.0005
+            self.FOUNDATION_REWARD = 0.0005
+            self.EMPTY_COLUMN_REWARD = 0.001
+            self.FREECELL_RELEASE_REWARD = 0.0005
+            self.NATURAL_MOVE_REWARD = 0.0005
+            self.FOUNDATION_SRC_PENALTY = 0.002
+        else:  # astar
+            self.FC_PENALTY_BASE = 0.01
+            self.FC_PENALTY_PER_EMPTY = 0.005
+            self.FOUNDATION_REWARD = 0.05
+            self.EMPTY_COLUMN_REWARD = 0.02
+            self.FREECELL_RELEASE_REWARD = 0.01
+            self.NATURAL_MOVE_REWARD = 0.01
+            self.FOUNDATION_SRC_PENALTY = 0.1
+    
+    def get_epsilon(self):
+        if self.algorithm == 'ucs':
+            return self.UCS_EPSILON
+        return self.ASTAR_EPSILON
+
+
 class FreeCellSolver: 
     def __init__(self, initial_state: GameState):
         self.initial_state = initial_state
@@ -105,11 +143,22 @@ class FreeCellSolver:
         src_piles = tableau_sources + freecell_sources
 
         dst_tableau = [PileRef(PileType.TABLEAU, i) for i in range(8)]
-        dst_freecells = [
-            PileRef(PileType.FREECELL, idx)
-            for idx, card in enumerate(state.free_cells)
-            if card is None
-        ]
+        
+        # Symmetry breaking: Chỉ thêm ONE empty freecell duy nhất làm dst
+        empty_fc_idx = -1
+        for idx in range(4):
+            if state.free_cells[idx] is None:
+                empty_fc_idx = idx
+                break
+
+        dst_freecells = []
+        for idx, card in enumerate(state.free_cells):
+            if card is None:
+                if idx == empty_fc_idx:
+                    dst_freecells.append(PileRef(PileType.FREECELL, idx))
+            else:
+                pass # Already handled freecells occupancy in sources
+
         dst_foundations = [PileRef(PileType.FOUNDATION, i) for i in range(4)]
         dst_piles = dst_tableau + dst_freecells + dst_foundations
 
@@ -141,6 +190,23 @@ class FreeCellSolver:
                     if result.ok:
                         moves.append((src, dst, start_index))
 
+        # Kỹ thuật: Move Sorting - Ép các nước đi lên Foundation xếp lên hàng ưu tiên số 1
+        # Trọng số:
+        #  -1: Ưu tiên tuyệt đối (Đưa bài lên Foundation)
+        #   0: Ưu tiên nhì (Đảo bài trên Tableau)
+        #   1: Ưu tiên bét (Vứt bài vào Freecell rỗng)
+        def _score_move(m: tuple[PileRef, PileRef, int]) -> int:
+            dst_pile = m[1]
+            if dst_pile.kind == PileType.FOUNDATION:
+                return -1
+            if dst_pile.kind == PileType.TABLEAU:
+                return 0
+            if dst_pile.kind == PileType.FREECELL:
+                return 1
+            return 2
+
+        moves.sort(key=_score_move)
+        
         return moves
     
     def bfs_solving(self):
@@ -234,42 +300,103 @@ class FreeCellSolver:
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes, "depth_reached": max_depth}
     
     
-    def heuristic(self, state: GameState) -> int:
-        # 1. Cơ bản nhất: Số lá bài còn lại chưa được đưa lên Foundation
-        cards_in_foundation = sum(len(pile) for pile in state.foundations.values())
-        h_score = 52 - cards_in_foundation
+    def get_move_cost(self, current_state: GameState, move: tuple[PileRef, PileRef, int], config: MoveCostConfig = MoveCostConfig('ucs')) -> float:
+        """
+        Tính cost cho nước đi với cấu hình linh hoạt.
+        Dùng được cho cả UCS và A*.
+        """
+        src, dst, start_index = move
+        cost = config.BASE_COST
         
-        # 2. Phạt nếu các lá bài quan trọng (nhỏ) bị đè trong Tableau
-        # (Điều này không vi phạm tính admissible vì để lấy lá bài bị đè n lá, 
-        # chắc chắn phải tốn ít nhất n nước đi để dọn đường)
-        for col_idx, col in enumerate(state.tableau):
-            if not col:
-                continue
+        # Thống kê tài nguyên hiện tại
+        empty_freecell = sum(1 for fc in current_state.free_cells if fc is None)
+        empty_tableau = sum(1 for col in current_state.tableau if not col)
+        total_freecell = len(current_state.free_cells)
+        
+        # === 1. Nước đi lên Foundation ===
+        if dst.kind == PileType.FOUNDATION:
+            cost -= config.FOUNDATION_REWARD
+        
+        # === 2. Nước đi vào Freecell ===
+        elif dst.kind == PileType.FREECELL:
+            # Càng nhiều freecell trống, càng nên hạn chế dùng
+            penalty = (config.FC_PENALTY_BASE + 
+                      (empty_freecell * config.FC_PENALTY_PER_EMPTY))
+            cost += penalty
+        
+        # === 3. Nước đi vào Tableau ===
+        elif dst.kind == PileType.TABLEAU:
+            # 3a. Di chuyển toàn bộ cột (tạo cột trống)
+            if src.kind == PileType.TABLEAU and start_index == 0:
+                # Càng ít cột trống, reward càng lớn
+                reward = config.EMPTY_COLUMN_REWARD * (1 + empty_tableau * 0.5)
+                cost -= reward
             
-            # Duyệt từ đỉnh xuống đáy cột
-            for i, card in enumerate(col):
-                suit = card.suit
-                foundation_pile = state.foundations[suit]
-                
-                # Lá bài tiếp theo cần đưa lên foundation cho chất này
-                next_needed_rank = len(foundation_pile) + 1
-                
-                # Nếu lá bài này cần để đưa lên foundation mà bị đè 
-                if card.rank == next_needed_rank:
-                    cards_blocking = len(col) - 1 - i
-                    h_score += cards_blocking
-                    
-        return h_score
+            # 3b. Giải phóng Freecell
+            elif src.kind == PileType.FREECELL:
+                # Càng ít freecell trống, càng quý
+                occupied_freecell = total_freecell - empty_freecell
+                reward = config.FREECELL_RELEASE_REWARD * (1 + occupied_freecell * 0.5)
+                cost -= reward
+            
+            # 3c. Nước đi tự nhiên (xếp đúng màu, giảm dần)
+            if self._is_natural_tableau_move(current_state, src, dst, start_index):
+                cost -= config.NATURAL_MOVE_REWARD
+        
+        # === 4. Phạt nước đi từ Foundation ra ===
+        if src.kind == PileType.FOUNDATION:
+            cost += config.FOUNDATION_SRC_PENALTY
+        
+        # === 5. Đặc biệt cho UCS: phạt nhẹ nước đi vô ích ===
+        if config.algorithm == 'ucs' and self._is_useless_move(current_state, src, dst, start_index):
+            cost += config.UCS_EPSILON * 0.5
+        
+        # Đảm bảo cost > 0 và không quá lớn
+        min_cost = config.get_epsilon()
+        return max(cost, min_cost)
     
+    def _is_natural_tableau_move(self, state: GameState, src: PileRef, dst: PileRef, start_index: int) -> bool:
+        """Kiểm tra nước đi có tự nhiên (xếp đúng quy tắc) không."""
+        src_pile = pick_cards(state, src, start_index)
+        dst_pile = state.tableau[dst.index] if dst.kind == PileType.TABLEAU else []
+        if not dst_pile or not src_pile:
+            return False
+        
+        top_dst = dst_pile[-1]
+        moved_card = src_pile[0]
+        
+        return (is_red(top_dst.suit) != is_red(moved_card.suit) and 
+                top_dst.rank == moved_card.rank + 1)
     
+    def _is_useless_move(self, state: GameState, src: PileRef, dst: PileRef, start_index: int) -> bool:
+        """
+        Phát hiện nước đi vô ích (chỉ làm tăng độ phức tạp).
+        Dùng chủ yếu cho UCS để tránh lãng phí.
+        """
+        # Di chuyển qua lại giữa các freecell
+        if (src.kind == PileType.FREECELL and 
+            dst.kind == PileType.FREECELL):
+            return True
+        
+        # Di chuyển bài từ tableau này sang tableau khác 
+        # mà không tạo sequence có ích
+        src_pile_len = len(state.tableau[src.index]) if src.kind == PileType.TABLEAU else 1
+        if (src.kind == PileType.TABLEAU and 
+            dst.kind == PileType.TABLEAU and 
+            src_pile_len - start_index == 1 and start_index == 0):
+            # Di chuyển lá bài đơn độc vô ích
+            return True
+        
+        return False
+
     def ucs_solving(self):
-        """Uniform Cost Search - Trọng số g(n) = số nước đi"""
+        """Uniform Cost Search - Trọng số g(n) = tổng cost của từng nước đi (get_move_cost)"""
         start_time = time.time()
         expanded_nodes = 0
         
         # Priority Queue lưu: (cost, tie_breaker, state, path)
         count = 0
-        queue = [(0, count, self.initial_state, [])]
+        queue = [(0.0, count, self.initial_state, [])]
         visited = set()
         
         while queue:
@@ -303,13 +430,47 @@ class FreeCellSolver:
                 
                 if self.hash_state(new_state) not in visited:
                     count += 1
-                    # Gốc UCS: cost mới = cost cũ + 1 (mỗi bước tốn 1 đơn vị)
-                    heapq.heappush(queue, (cost + 1, count, new_state, path + [move]))
+                    # Gốc UCS bằng 1, ở đây áp dụng cost function động
+                    config = MoveCostConfig('ucs')
+                    move_cost = self.get_move_cost(current_state, move, config)
+                    heapq.heappush(queue, (cost + move_cost, count, new_state, path + [move]))
             
         search_time = time.time() - start_time
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
         
+    
+    def heuristic(self, state: GameState) -> int:
+        # 1. Cơ bản nhất: Số lá bài còn lại chưa được đưa lên Foundation
+        cards_in_foundation = sum(len(pile) for pile in state.foundations.values())
+        h_score = (52 - cards_in_foundation) * 5  # Nhân hệ số 5 để ưu tiên việc đẩy bài lên Foundation
         
+        # 2. Phạt cấu trúc Tableau xấu và lá bài bị đè
+        for col_idx, col in enumerate(state.tableau):
+            if not col:
+                continue
+            
+            for i in range(len(col)):
+                card = col[i]
+                
+                # Phạt đứt gãy sequence (lá dưới không nối tiếp đúng lá trên)
+                if i < len(col) - 1:
+                    next_card = col[i+1]
+                    if is_red(card.suit) == is_red(next_card.suit) or next_card.rank != card.rank - 1:
+                        h_score += 2
+                
+                # Phạt nếu đè lên lá đang cần đưa lên Foundation ngay lập tức
+                foundation_pile = state.foundations.get(card.suit.value, [])
+                next_needed_rank = len(foundation_pile) + 1
+                if card.rank == next_needed_rank:
+                    cards_blocking = len(col) - 1 - i
+                    h_score += cards_blocking * 4 # Phạt rất nặng vì cản trở tiến độ
+                    
+        # 3. Phạt Freecell bị chiếm dụng (mất đi không gian trung chuyển)
+        occupied_fc = sum(1 for c in state.free_cells if c is not None)
+        h_score += occupied_fc * 2
+        
+        return h_score
+    
     def astar_solving(self):
         """A* Search - Đánh giá ưu tiên f(n) = g(n) + h(n)"""
         start_time = time.time()
@@ -318,7 +479,7 @@ class FreeCellSolver:
         # Priority Queue lưu: (f_score, tie_breaker, g_cost, state, path)
         count = 0
         start_h = self.heuristic(self.initial_state)
-        queue = [(start_h, count, 0, self.initial_state, [])]
+        queue = [(start_h, count, 0.0, self.initial_state, [])]
         visited = set()
         
         while queue:
@@ -352,7 +513,9 @@ class FreeCellSolver:
                 
                 if self.hash_state(new_state) not in visited:
                     count += 1
-                    new_g = g_cost + 1
+                    config = MoveCostConfig('astar')
+                    move_cost = self.get_move_cost(current_state, move, config)
+                    new_g = g_cost + move_cost
                     new_h = self.heuristic(new_state)
                     new_f = new_g + new_h
                     
