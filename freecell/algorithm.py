@@ -126,6 +126,7 @@ class FreeCellSolver:
         search_time = time.time() - start_time
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
     
+
     def ids_solving(self, max_depth: int = 100):
         start_time = time.time()
         expanded_nodes = 0
