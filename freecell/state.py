@@ -21,6 +21,14 @@ class GameState:
     )
     won: bool = False
 
+    def clone(self) -> GameState:
+        clone = GameState()
+        clone.tableau = [list(col) for col in self.tableau]
+        clone.free_cells = list(self.free_cells)
+        clone.foundations = {suit: list(pile) for suit, pile in self.foundations.items()}
+        clone.won = self.won
+        return clone
+
 
 def build_shuffled_deck(rng: random.Random) -> list[Card]:
     """Create and shuffle a standard 52-card deck."""
@@ -64,7 +72,23 @@ def get_card_from_str(card_str: str) -> Card:
 
 
 def generate_state_testcase(testcase_num: int = 1) -> GameState:
-    """Load a specific testcase from the testcase folder and generate GameState."""
+    """Load a specific testcase from the testcase folder and generate GameState.
+    Supports a custom structured format for setting up endgame states.
+    Format:
+    [FOUNDATION]
+    C: KC
+    S: KS
+    D: QD
+    H: JH
+    
+    [FREECELL]
+    0: AD
+    1: empty
+    
+    [TABLEAU]
+    KH QH
+    KD
+    """
     state = GameState()
     
     # Locate the testcase file
@@ -76,16 +100,58 @@ def generate_state_testcase(testcase_num: int = 1) -> GameState:
         return deal_new_game()
         
     with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+        lines = [line.strip() for line in f.readlines()]
         
-    # Standard Freecell text format: cards are listed row by row across columns
-    for row_lines in lines:
-        if not row_lines.strip():
-            continue
-        cards = row_lines.strip().split()
-        for col_idx, card_str in enumerate(cards):
-            card = get_card_from_str(card_str)
-            state.tableau[col_idx].append(card)
+    # Check if it uses the new detailed format
+    if any("[FOUNDATION]" in line for line in lines):
+        current_section = None
+        for line in lines:
+            if not line:
+                continue
+            if line.startswith("["):
+                current_section = line
+                continue
+                
+            if current_section == "[FOUNDATION]":
+                # Format: C: KC  -> meaning Clubs has cards from AC up to KC
+                parts = line.split(":")
+                if len(parts) == 2:
+                    suit_char = parts[0].strip()
+                    top_card_str = parts[1].strip()
+                    if top_card_str.lower() != "empty" and top_card_str:
+                        top_card = get_card_from_str(top_card_str)
+                        suit = top_card.suit
+                        state.foundations[suit] = [Card(suit, r) for r in range(1, top_card.rank + 1)]
+                        
+            elif current_section == "[FREECELL]":
+                # Format: 0: AD  or 1: empty
+                parts = line.split(":")
+                if len(parts) == 2:
+                    idx = int(parts[0].strip())
+                    card_str = parts[1].strip()
+                    if card_str.lower() != "empty" and card_str:
+                        state.free_cells[idx] = get_card_from_str(card_str)
+                        
+            elif current_section == "[TABLEAU]":
+                # Each line is a column, top to bottom
+                # Format: KH QH
+                if line.lower() != "empty":
+                    cards = [get_card_from_str(c) for c in line.split()]
+                    # find first empty column to put them in
+                    for i in range(8):
+                        if not state.tableau[i]:
+                            state.tableau[i] = cards
+                            break
+    else:
+        # Fallback to the old simple tableau-only matrix parser
+        row_idx = 0
+        for line in lines:
+            if not line:
+                continue
+            cards = line.split()
+            for col_idx, card_str in enumerate(cards):
+                card = get_card_from_str(card_str)
+                state.tableau[col_idx].append(card)
             
     return state
 

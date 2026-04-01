@@ -1,14 +1,35 @@
+from .models import is_red
 from .state import GameState
 from .rules import validate_move, max_movable_cards, apply_move, PileRef, PileType, pick_cards
 from collections import deque
-from copy import deepcopy
 import time
 import sys
 import heapq
 
+DEBUG_STATS = True
+REPORT_INTERVAL = 1000
+
+
 class FreeCellSolver: 
     def __init__(self, initial_state: GameState):
         self.initial_state = initial_state
+
+    def _report_stats(
+        self,
+        phase: str,
+        start_time: float,
+        expanded_nodes: int,
+        frontier_size: int,
+        depth: int,
+    ) -> None:
+        if not DEBUG_STATS:
+            return
+        if expanded_nodes > 0 and expanded_nodes % REPORT_INTERVAL:
+            return
+        elapsed = time.time() - start_time
+        print(
+            f"[DEBUG][{phase}] expanded={expanded_nodes}, frontier={frontier_size}, depth={depth}, elapsed={elapsed:.2f}s"
+        )
         
     def hash_state(self, state: GameState) -> bytes:
         # Tối ưu hóa: Biểu diễn trạng thái bằng dãy bytes siêu nhỏ gọn (chỉ ~60 bytes/state)
@@ -49,42 +70,77 @@ class FreeCellSolver:
     def is_win_state(self, state: GameState) -> bool:
         return sum(len(pile) for pile in state.foundations.values()) == 52
     
+    def _tableau_sequences(self, column: list) -> list[tuple[int, int]]:
+        sequences: list[tuple[int, int]] = []
+        if not column:
+            return sequences
+        seq_len = 1
+        sequences.append((len(column) - 1, seq_len))
+        prev_card = column[-1]
+        for idx in range(len(column) - 2, -1, -1):
+            candidate = column[idx]
+            if (
+                is_red(candidate.suit) == is_red(prev_card.suit)
+                or candidate.rank != prev_card.rank + 1
+            ):
+                break
+            seq_len += 1
+            sequences.append((idx, seq_len))
+            prev_card = candidate
+        return sequences
+
     def get_all_possible_move(self, state: GameState):
         moves = []
-        
-        # Tạo danh sách tất cả các vị trí có thể đặt/lấy bài
-        piles = []
-        for i in range(8): piles.append(PileRef(PileType.TABLEAU, i))
-        for i in range(4): piles.append(PileRef(PileType.FREECELL, i))
-        for i in range(4): piles.append(PileRef(PileType.FOUNDATION, i))
-        
-        # Duyệt qua tất cả các cặp (nguồn, đích)
-        for src in piles:
-            # Lấy list các start_index hợp lệ để xét (bốc từ đâu trong cột)
+
+        tableau_sources = [
+            PileRef(PileType.TABLEAU, idx)
+            for idx, column in enumerate(state.tableau)
+            if column
+        ]
+        freecell_sources = [
+            PileRef(PileType.FREECELL, idx)
+            for idx, card in enumerate(state.free_cells)
+            if card
+        ]
+        src_piles = tableau_sources + freecell_sources
+
+        dst_tableau = [PileRef(PileType.TABLEAU, i) for i in range(8)]
+        dst_freecells = [
+            PileRef(PileType.FREECELL, idx)
+            for idx, card in enumerate(state.free_cells)
+            if card is None
+        ]
+        dst_foundations = [PileRef(PileType.FOUNDATION, i) for i in range(4)]
+        dst_piles = dst_tableau + dst_freecells + dst_foundations
+
+        for src in src_piles:
             if src.kind == PileType.TABLEAU:
-                col_len = len(state.tableau[src.index])
-                if col_len == 0: 
-                    continue
-                indices_to_check = list(range(col_len))
+                sequences = self._tableau_sequences(state.tableau[src.index])
             else:
-                # Đối với FreeCell và Foundation, chỉ lấy 1 lá ngoài cùng (index = -1)
-                indices_to_check = [-1]
-                
-            for dst in piles:
-                if src == dst: 
+                sequences = [(-1, 1)]
+            if not sequences:
+                continue
+
+            for dst in dst_piles:
+                if src == dst:
                     continue
-                
-                for start_index in indices_to_check:
-                    # Lấy thử các lá bài ra để kiểm tra
+                allow_multi = dst.kind == PileType.TABLEAU
+                max_cards = max_movable_cards(state, dst.index) if allow_multi else 1
+
+                for start_index, seq_len in sequences:
+                    if not allow_multi and seq_len != 1:
+                        continue
+                    if allow_multi and seq_len > max_cards:
+                        continue
+
                     cards = pick_cards(state, src, start_index)
                     if not cards:
                         continue
-                    
-                    # Dùng hàm validate_move trong rules.py để kiểm tra hợp lệ
+
                     result = validate_move(state, src, dst, cards)
                     if result.ok:
                         moves.append((src, dst, start_index))
-                        
+
         return moves
     
     def bfs_solving(self):
@@ -101,6 +157,7 @@ class FreeCellSolver:
                 
             current_state, path = queue.popleft()
             expanded_nodes += 1
+            self._report_stats("BFS", start_time, expanded_nodes, len(queue), len(path))
             
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
@@ -115,7 +172,7 @@ class FreeCellSolver:
             
             for move in self.get_all_possible_move(current_state):
                 # Thực hiện copy và apply_move thật sự để tạo state mới (sửa lỗi code cũ mất apply_move)
-                new_state = deepcopy(current_state)
+                new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
                 
                 state_hash = self.hash_state(new_state)
@@ -143,6 +200,7 @@ class FreeCellSolver:
                     
                 current_state, path, current_depth = stack.pop()
                 expanded_nodes += 1
+                self._report_stats("IDS", start_time, expanded_nodes, len(stack), current_depth)
                 
                 if self.is_win_state(current_state):
                     search_time = time.time() - start_time
@@ -161,7 +219,7 @@ class FreeCellSolver:
                     continue
                     
                 for move in self.get_all_possible_move(current_state):
-                    new_state = deepcopy(current_state)
+                    new_state = current_state.clone()
                     apply_move(new_state, move[0], move[1], move[2])
                     
                     state_hash = self.hash_state(new_state)
@@ -226,6 +284,7 @@ class FreeCellSolver:
             visited.add(state_hash)
             
             expanded_nodes += 1
+            self._report_stats("UCS", start_time, expanded_nodes, len(queue), len(path))
             
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
@@ -239,7 +298,7 @@ class FreeCellSolver:
                 }
             
             for move in self.get_all_possible_move(current_state):
-                new_state = deepcopy(current_state)
+                new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
                 
                 if self.hash_state(new_state) not in visited:
@@ -274,6 +333,7 @@ class FreeCellSolver:
             visited.add(state_hash)
             
             expanded_nodes += 1
+            self._report_stats("A*", start_time, expanded_nodes, len(queue), len(path))
             
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
@@ -287,7 +347,7 @@ class FreeCellSolver:
                 }
             
             for move in self.get_all_possible_move(current_state):
-                new_state = deepcopy(current_state)
+                new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
                 
                 if self.hash_state(new_state) not in visited:
