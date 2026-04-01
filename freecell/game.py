@@ -78,7 +78,7 @@ class FreeCellGame:
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = generate_state_testcase(1)
+        self.state: GameState = generate_state_testcase(2)
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -95,7 +95,7 @@ class FreeCellGame:
         self.auto_foundation_active = False
         self.solution_moves: list = []
         # UI state
-        self.game_id: int = 3953522
+        self.game_id: int = 2  # endgame demo (BFS ~4 moves)
         self.score: int = 0
         self.elapsed: float = 0.0
         self.pressed_button_label: str = ""
@@ -106,7 +106,7 @@ class FreeCellGame:
         self.status_until = time() + seconds
 
     def new_game(self) -> None:
-        self.state = generate_state_testcase(1)
+        self.state = generate_state_testcase(2)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None
