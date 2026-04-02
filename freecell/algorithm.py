@@ -2,22 +2,18 @@ from .models import is_red
 from .state import GameState
 from .rules import validate_move, max_movable_cards, apply_move, PileRef, PileType, pick_cards
 from collections import deque
-import time
-import sys
 import heapq
+import sys
+import threading
+import time
 
+# Bật DEBUG_STATS=True để in thống kê định kỳ; mỗi nhóm solver dùng REPORT_INTERVAL riêng.
 DEBUG_STATS = True
-REPORT_INTERVAL = 1000
+REPORT_INTERVAL_BFS_IDS = 1000  # BFS, IDS (DFS iterative deepening)
+REPORT_INTERVAL_UCS_ASTAR = 100  # UCS, A*
 
-# ===== BFS DEBUG CONFIG =====
-# BFS_DEBUG_LEVEL:
-#   0 = Tắt hoàn toàn
-#   1 = Chỉ in thống kê tổng (mỗi BFS_DEBUG_INTERVAL node)
-#   2 = In chi tiết mỗi node được expand (state + số moves sinh)
-#   3 = In CỰC chi tiết: từng move được xét, skip hay thêm vào queue
-BFS_DEBUG_LEVEL = 1
-BFS_DEBUG_INTERVAL = 500   # In thống kê mỗi bao nhiêu node (level 1)
-BFS_NODE_LIMIT   = 50      # Chỉ in chi tiết node/move cho N node đầu (level 2,3)
+# Sentinel: IDS dls() trả về khi bị hủy (UI timeout / cancel event)
+_SOLVER_IDS_CANCELLED = object()
 
 
 class MoveCostConfig:
@@ -53,7 +49,9 @@ class MoveCostConfig:
             self.EMPTY_COLUMN_REWARD = 0.03
             self.FREECELL_RELEASE_REWARD = 0.02
             self.NATURAL_MOVE_REWARD = 0.01
-            self.FOUNDATION_SRC_PENALTY = 0.1
+            # Phạt mạnh kéo bài từ foundation xuống để giảm vòng lặp lớn trong A*
+            # (vẫn cho phép để không làm mất tính đầy đủ của thuật toán)
+            self.FOUNDATION_SRC_PENALTY = 3.0
     
     def get_epsilon(self):
         return self.EPSILON
@@ -62,9 +60,29 @@ class MoveCostConfig:
         return self.MIN_COST
 
 
-class FreeCellSolver: 
-    def __init__(self, initial_state: GameState):
+class FreeCellSolver:
+    def __init__(
+        self,
+        initial_state: GameState,
+        cancel_event: threading.Event | None = None,
+    ):
         self.initial_state = initial_state
+        self._cancel_event = cancel_event
+
+    def _solver_cancelled(self) -> bool:
+        return self._cancel_event is not None and self._cancel_event.is_set()
+
+    def _return_cancelled(
+        self, start_time: float, expanded_nodes: int, **extra: object
+    ) -> dict:
+        out: dict = {
+            "path": None,
+            "search_time": time.time() - start_time,
+            "expanded_nodes": expanded_nodes,
+            "cancelled": True,
+        }
+        out.update(extra)
+        return out
 
     def _report_stats(
         self,
@@ -73,10 +91,12 @@ class FreeCellSolver:
         expanded_nodes: int,
         frontier_size: int,
         depth: int,
+        *,
+        interval: int,
     ) -> None:
         if not DEBUG_STATS:
             return
-        if expanded_nodes > 0 and expanded_nodes % REPORT_INTERVAL:
+        if expanded_nodes > 0 and expanded_nodes % interval:
             return
         elapsed = time.time() - start_time
         print(
@@ -117,6 +137,31 @@ class FreeCellSolver:
             tab_bytes.extend(b)
             tab_bytes.append(255) # Byte ngăn cách các cột
             
+        return bytes(f_bytes + fc_bytes) + bytes(tab_bytes)
+
+    def _state_exact_key(self, state: GameState) -> bytes:
+        """
+        Exact key (không symmetry-breaking) để cache move generation an toàn theo index.
+        """
+        suit_idx = {"C": 0, "D": 1, "H": 2, "S": 3}
+        f_bytes = []
+        for s in ("C", "D", "H", "S"):
+            pile = state.foundations.get(s, [])
+            f_bytes.append(pile[-1].rank if pile else 0)
+
+        fc_bytes = []
+        for c in state.free_cells:
+            if c is None:
+                fc_bytes.append(0)
+            else:
+                fc_bytes.append(suit_idx[c.suit.value] * 13 + c.rank)
+
+        tab_bytes = bytearray()
+        for col in state.tableau:
+            for c in col:
+                tab_bytes.append(suit_idx[c.suit.value] * 13 + c.rank)
+            tab_bytes.append(255)
+
         return bytes(f_bytes + fc_bytes) + bytes(tab_bytes)
     
     def is_win_state(self, state: GameState) -> bool:
@@ -247,7 +292,7 @@ class FreeCellSolver:
         return any_applied, moves_applied
     # ===== END AUTO-FOUNDATION =====
 
-    def get_all_possible_move(self, state: GameState, _debug: bool = False):
+    def get_all_possible_move(self, state: GameState):
         moves = []
 
         tableau_sources = [
@@ -285,7 +330,6 @@ class FreeCellSolver:
         # ── OPTIMIZATION 3: Pre-compute thông tin để prune ──
         empty_tab_count = sum(1 for col in state.tableau if not col)
 
-        rejected = []  # chỉ dùng khi _debug=True ở level 3
         for src in src_piles:
             if src.kind == PileType.TABLEAU:
                 sequences = self._tableau_sequences(state.tableau[src.index])
@@ -314,10 +358,6 @@ class FreeCellSolver:
                             and src.kind == PileType.TABLEAU
                             and start_index == len(state.tableau[src.index]) - 1  # chỉ 1 lá trên đầu
                             and empty_tab_count >= 2):
-                        if _debug and BFS_DEBUG_LEVEL >= 3:
-                            cards = pick_cards(state, src, start_index)
-                            cards_str = ','.join(self._fmt_card(c) for c in cards)
-                            rejected.append(f"      [PRUNE-3a] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: cột trống dư thừa")
                         continue
 
                     # ── OPTIMIZATION 3b: Bỏ qua move toàn cột vào cột trống khi src chỉ có 1 lá ──
@@ -326,10 +366,6 @@ class FreeCellSolver:
                             and not state.tableau[dst.index]
                             and src.kind == PileType.TABLEAU
                             and len(state.tableau[src.index]) == 1):
-                        if _debug and BFS_DEBUG_LEVEL >= 3:
-                            cards = pick_cards(state, src, start_index)
-                            cards_str = ','.join(self._fmt_card(c) for c in cards)
-                            rejected.append(f"      [PRUNE-3b] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: cột 1 lá vào trống")
                         continue
 
                     cards = pick_cards(state, src, start_index)
@@ -339,16 +375,6 @@ class FreeCellSolver:
                     result = validate_move(state, src, dst, cards)
                     if result.ok:
                         moves.append((src, dst, start_index))
-                    elif _debug and BFS_DEBUG_LEVEL >= 3:
-                        cards_str = ','.join(self._fmt_card(c) for c in cards)
-                        rejected.append(f"      [REJECT] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: {result.reason}")
-
-        if _debug and BFS_DEBUG_LEVEL >= 3 and rejected:
-            print(f"    [BFS][MOVES] Bị loại/Prune ({len(rejected)} move):")
-            for r in rejected[:10]:  # Chỉ in tối đa 10 để tránh spam
-                print(r)
-            if len(rejected) > 10:
-                print(f"      ... và {len(rejected) - 10} move bị loại khác")
 
         # Kỹ thuật: Move Sorting - Ép các nước đi lên Foundation xếp lên hàng ưu tiên số 1
         # Trọng số:
@@ -367,7 +393,7 @@ class FreeCellSolver:
 
         moves.sort(key=_score_move)
         return moves
-    
+
     def bfs_solving(self):
         """
         BFS tối ưu với 3 kỹ thuật:
@@ -383,13 +409,6 @@ class FreeCellSolver:
         _, initial_forced_moves = self._apply_forced_foundations(initial_state_norm)
         initial_hash = self.hash_state(initial_state_norm)
 
-        # ── BFS DEBUG: Khởi động ──
-        if BFS_DEBUG_LEVEL >= 1:
-            print("\n" + "=" * 60)
-            print("[BFS] BẮT ĐẦU TÌM KIẾM (đã tối ưu: Parent Tracking + Auto-Foundation + Pruning)")
-            print(f"[BFS] State ban đầu (sau forced): {self._fmt_state_brief(initial_state_norm)}")
-            print("=" * 60)
-
         # ── OPTIMIZATION 1: Parent Tracking ──
         # parent dict: hash → (parent_hash, moves_segment)
         # moves_segment = [explicit_move] + forced_moves (tất cả moves cần để game replay)
@@ -399,11 +418,10 @@ class FreeCellSolver:
             [(initial_state_norm, initial_hash, 0)]
         )
 
-        if BFS_DEBUG_LEVEL >= 2:
-            print(f"[BFS] Hash state ban đầu: {initial_hash.hex()[:20]}...")
-            print(f"[BFS] Queue khởi tạo: {len(queue)} node")
-
         while queue:
+            if self._solver_cancelled():
+                return self._return_cancelled(start_time, expanded_nodes)
+
             # FIX: Chỉ yield GIL khi đã expand ít nhất 1 node (tránh sleep trước khi bắt đầu)
             if expanded_nodes > 0 and expanded_nodes % 2000 == 0:
                 time.sleep(0.001)  # Yield GIL cho giao dien pygame
@@ -412,24 +430,14 @@ class FreeCellSolver:
             current_state, current_hash, depth = queue.popleft()
             expanded_nodes += 1
 
-            # ── BFS DEBUG level 1: Thống kê theo interval ──
-            if BFS_DEBUG_LEVEL >= 1 and expanded_nodes % BFS_DEBUG_INTERVAL == 0:
-                elapsed = time.time() - start_time
-                print(f"[BFS][STAT] node={expanded_nodes:,}  queue={len(queue):,}  "
-                      f"visited={len(parent):,}  depth={depth}  "
-                      f"elapsed={elapsed:.2f}s")
-
-            # ── BFS DEBUG level 2: Chi tiết từng node ──
-            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
-                par_entry = parent.get(current_hash)
-                last_move_str = "(gốc)"
-                if par_entry is not None:
-                    last_move_str = self._fmt_move(current_state, par_entry[1])
-                print(f"\n[BFS][NODE #{expanded_nodes}] depth={depth}  queue_size={len(queue)}")
-                print(f"  State: {self._fmt_state_brief(current_state)}")
-                print(f"  Nước vừa đi: {last_move_str}")
-
-            self._report_stats("BFS", start_time, expanded_nodes, len(queue), depth)
+            self._report_stats(
+                "BFS",
+                start_time,
+                expanded_nodes,
+                len(queue),
+                depth,
+                interval=REPORT_INTERVAL_BFS_IDS,
+            )
 
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
@@ -446,24 +454,6 @@ class FreeCellSolver:
                 # Thêm forced moves của initial state (nếu có) vào đầu path
                 path = initial_forced_moves + path
 
-                # ── BFS DEBUG: Kết quả thắng ──
-                if BFS_DEBUG_LEVEL >= 1:
-                    print("\n" + "=" * 60)
-                    print(f"[BFS] ✅ TÌM THẤY LỜI GIẢI!")
-                    print(f"[BFS]   Số bước: {len(path)}")
-                    print(f"[BFS]   Số node đã expand: {expanded_nodes:,}")
-                    print(f"[BFS]   Kích thước queue cuối: {len(queue):,}")
-                    print(f"[BFS]   Số state đã thăm: {len(parent):,}")
-                    print(f"[BFS]   Thời gian: {search_time:.4f}s")
-                    print(f"[BFS]   Bộ nhớ (ước lượng): {memory_usage:,} bytes")
-                    print("=" * 60)
-                if BFS_DEBUG_LEVEL >= 2:
-                    print("[BFS] Chuỗi nước đi (path):")
-                    trace_state = self.initial_state.clone()
-                    for i, mv in enumerate(path):
-                        print(f"  Bước {i+1:3d}: {self._fmt_move(trace_state, mv)}")
-                        apply_move(trace_state, mv[0], mv[1], mv[2])
-
                 return {
                     "path": path,
                     "search_time": search_time,
@@ -473,15 +463,12 @@ class FreeCellSolver:
                 }
 
             # ── Sinh moves và mở rộng node ──
-            use_detail = BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT
-            possible_moves = self.get_all_possible_move(current_state, _debug=use_detail)
+            possible_moves = self.get_all_possible_move(current_state)
 
-            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
-                print(f"  Sinh được {len(possible_moves)} move hợp lệ")
-
-            added_count = 0
-            skipped_count = 0
             for move in possible_moves:
+                if self._solver_cancelled():
+                    return self._return_cancelled(start_time, expanded_nodes)
+
                 new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
 
@@ -495,29 +482,8 @@ class FreeCellSolver:
                     moves_segment = [move] + forced_moves
                     parent[state_hash] = (current_hash, moves_segment)
                     queue.append((new_state, state_hash, depth + 1))
-                    added_count += 1
-
-                    if BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT:
-                        print(f"    [ADD ] {self._fmt_move(current_state, move)}  "
-                              f"hash={state_hash.hex()[:12]}...")
-                else:
-                    skipped_count += 1
-                    if BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT:
-                        print(f"    [SKIP] {self._fmt_move(current_state, move)}  (đã thăm)")
-
-            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
-                print(f"  > Thêm vào queue: {added_count}  |  Skip (đã thăm): {skipped_count}")
 
         search_time = time.time() - start_time
-
-        # ── BFS DEBUG: Không tìm được lời giải ──
-        if BFS_DEBUG_LEVEL >= 1:
-            print("\n" + "=" * 60)
-            print(f"[BFS] ❌ KHÔNG TÌM THẤY LỜI GIẢI")
-            print(f"[BFS]   Số node đã expand: {expanded_nodes:,}")
-            print(f"[BFS]   Số state đã thăm: {len(parent):,}")
-            print(f"[BFS]   Thời gian: {search_time:.4f}s")
-            print("=" * 60)
 
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
     
@@ -532,11 +498,17 @@ class FreeCellSolver:
         def dls(state, depth_limit, current_depth, last_move, path, path_set):
             nonlocal expanded_nodes
             expanded_nodes += 1
+            if self._solver_cancelled():
+                return _SOLVER_IDS_CANCELLED
 
-            if expanded_nodes % 100_000 == 0:
-                self._report_stats(
-                    "IDS", start_time, expanded_nodes, len(path), current_depth
-                )
+            self._report_stats(
+                "IDS",
+                start_time,
+                expanded_nodes,
+                len(path),
+                current_depth,
+                interval=REPORT_INTERVAL_BFS_IDS,
+            )
 
             if self.is_win_state(state):
                 return list(path)
@@ -548,6 +520,9 @@ class FreeCellSolver:
 
             # Pure IDS: Lấy tất cả nước đi hợp lệ
             for move in self.get_all_possible_move(state):
+                if self._solver_cancelled():
+                    return _SOLVER_IDS_CANCELLED
+
                 if last_move and move[0] == last_move[1] and move[1] == last_move[0]:
                     continue
 
@@ -575,6 +550,8 @@ class FreeCellSolver:
                 result = dls(
                     state, depth_limit, current_depth + 1, move, path, path_set
                 )
+                if result is _SOLVER_IDS_CANCELLED:
+                    return _SOLVER_IDS_CANCELLED
                 if result is not None:
                     return result
 
@@ -603,8 +580,24 @@ class FreeCellSolver:
             }
 
         for d_limit in range(1, max_depth + 1):
+            if self._solver_cancelled():
+                return self._return_cancelled(
+                    start_time,
+                    expanded_nodes,
+                    memory_usage_bytes=sys.getsizeof(global_visited)
+                    + len(global_visited) * (sys.getsizeof(init_hash) + 28),
+                )
+
             path_set = {init_hash}
             res = dls(initial_state, d_limit, 0, None, list(init_auto), path_set)
+
+            if res is _SOLVER_IDS_CANCELLED:
+                return self._return_cancelled(
+                    start_time,
+                    expanded_nodes,
+                    memory_usage_bytes=sys.getsizeof(global_visited)
+                    + len(global_visited) * (sys.getsizeof(init_hash) + 28),
+                )
 
             if res is not None:
                 memory_usage = (
@@ -740,6 +733,9 @@ class FreeCellSolver:
         # === 4. Phạt nước đi từ Foundation ra ===
         if src.kind == PileType.FOUNDATION:
             cost += config.FOUNDATION_SRC_PENALTY
+            # Kéo từ foundation xuống freecell gần như luôn là nước lùi, phạt thêm.
+            if dst.kind == PileType.FREECELL:
+                cost += config.FOUNDATION_SRC_PENALTY
         
         # === 5. Đặc biệt cho UCS: phạt nhẹ nước đi vô ích ===
         if config.algorithm == 'ucs' and self._is_useless_move(current_state, src, dst, start_index):
@@ -798,6 +794,9 @@ class FreeCellSolver:
         config = MoveCostConfig("ucs")
 
         while queue:
+            if self._solver_cancelled():
+                return self._return_cancelled(start_time, expanded_nodes)
+
             if expanded_nodes % 2000 == 0:
                 time.sleep(0.001)
 
@@ -808,7 +807,14 @@ class FreeCellSolver:
                 continue
 
             expanded_nodes += 1
-            self._report_stats("UCS", start_time, expanded_nodes, len(queue), len(path))
+            self._report_stats(
+                "UCS",
+                start_time,
+                expanded_nodes,
+                len(queue),
+                len(path),
+                interval=REPORT_INTERVAL_UCS_ASTAR,
+            )
 
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
@@ -823,6 +829,9 @@ class FreeCellSolver:
                 }
 
             for move in self.get_all_possible_move(current_state):
+                if self._solver_cancelled():
+                    return self._return_cancelled(start_time, expanded_nodes)
+
                 move_cost = self.get_move_cost(current_state, move, config)
                 new_cost = cost + move_cost
 
@@ -876,6 +885,17 @@ class FreeCellSolver:
                 if card.rank == next_needed_rank:
                     cards_blocking = len(col) - 1 - i
                     h_score += cards_blocking * 10
+
+            # 2b. Reversal penalty: lá nhỏ cùng chất bị chôn dưới lá lớn hơn cùng chất.
+            # Điều này thường buộc phải "đào" lá nhỏ ra trước khi tiến lên foundation.
+            reversal_penalty = 0
+            for i in range(len(col) - 1):
+                lower = col[i]
+                for j in range(i + 1, len(col)):
+                    upper = col[j]
+                    if lower.suit == upper.suit and lower.rank < upper.rank:
+                        reversal_penalty += 1
+            h_score += min(reversal_penalty, 20) * 2
                     
         # 3. Phạt Freecell bị chiếm dụng (mất đi không gian trung chuyển)
         occupied_fc = sum(1 for c in state.free_cells if c is not None)
@@ -888,33 +908,64 @@ class FreeCellSolver:
         from .rules import undo_move
         start_time = time.time()
         expanded_nodes = 0
+        heuristic_cache: dict[bytes, int] = {}
+        move_cache: dict[bytes, list[tuple[PileRef, PileRef, int]]] = {}
 
         count = 0
         initial_state = self.initial_state.clone()
         init_auto, _ = self._auto_move_to_foundation_v2(initial_state)
-
+        start_hash = self.hash_state(initial_state)
         start_h = self.heuristic(initial_state)
-        queue = [(start_h, count, 0.0, initial_state, init_auto)]
-        visited = set()
+        heuristic_cache[start_hash] = start_h
+        # (f, tie_break, g, state, state_hash)
+        queue = [(start_h, count, 0.0, initial_state, start_hash)]
+        # Reopen logic: lưu g tốt nhất cho mỗi state
+        best_g: dict[bytes, float] = {start_hash: 0.0}
+        # Parent tracking để tránh copy path cho mỗi node
+        parent: dict[bytes, tuple[bytes, list[tuple[PileRef, PileRef, int]]] | None] = {
+            start_hash: None
+        }
+        depth_map: dict[bytes, int] = {start_hash: 0}
         config = MoveCostConfig("astar")
 
         while queue:
+            if self._solver_cancelled():
+                return self._return_cancelled(start_time, expanded_nodes)
+
             if expanded_nodes % 2000 == 0:
                 time.sleep(0.001)
 
-            _, _, g_cost, current_state, path = heapq.heappop(queue)
+            _, _, g_cost, current_state, current_hash = heapq.heappop(queue)
 
-            state_hash = self.hash_state(current_state)
-            if state_hash in visited:
+            # Ignore stale queue entries (khi đã có đường g tốt hơn)
+            if g_cost > best_g.get(current_hash, float("inf")) + config.EPSILON:
                 continue
-            visited.add(state_hash)
 
             expanded_nodes += 1
-            self._report_stats("A*", start_time, expanded_nodes, len(queue), len(path))
+            self._report_stats(
+                "A*",
+                start_time,
+                expanded_nodes,
+                len(queue),
+                depth_map.get(current_hash, 0),
+                interval=REPORT_INTERVAL_UCS_ASTAR,
+            )
 
             if self.is_win_state(current_state):
+                # Reconstruct path từ parent map
+                path: list[tuple[PileRef, PileRef, int]] = []
+                h = current_hash
+                while parent[h] is not None:
+                    par_hash, segment = parent[h]
+                    path.extend(reversed(segment))
+                    h = par_hash
+                path.reverse()
+                path = init_auto + path
+
                 search_time = time.time() - start_time
-                memory_usage = sys.getsizeof(visited) + sys.getsizeof(queue)
+                memory_usage = (
+                    sys.getsizeof(best_g) + sys.getsizeof(parent) + sys.getsizeof(queue)
+                )
                 return {
                     "path": path,
                     "search_time": search_time,
@@ -923,21 +974,38 @@ class FreeCellSolver:
                     "memory_usage_bytes": memory_usage,
                 }
 
-            for move in self.get_all_possible_move(current_state):
+            current_exact_key = self._state_exact_key(current_state)
+            moves = move_cache.get(current_exact_key)
+            if moves is None:
+                moves = self.get_all_possible_move(current_state)
+                move_cache[current_exact_key] = moves
+
+            for move in moves:
+                if self._solver_cancelled():
+                    return self._return_cancelled(start_time, expanded_nodes)
+
                 move_cost = self.get_move_cost(current_state, move, config)
                 new_g = g_cost + move_cost
 
                 _, moved = apply_move(current_state, move[0], move[1], move[2])
                 auto_moves, auto_cards = self._auto_move_to_foundation_v2(current_state)
 
-                if self.hash_state(current_state) not in visited:
+                new_hash = self.hash_state(current_state)
+                if new_g + config.EPSILON < best_g.get(new_hash, float("inf")):
+                    best_g[new_hash] = new_g
+                    segment = [move] + auto_moves
+                    parent[new_hash] = (current_hash, segment)
+                    depth_map[new_hash] = depth_map.get(current_hash, 0) + len(segment)
                     count += 1
-                    new_h = self.heuristic(current_state)
+                    new_h = heuristic_cache.get(new_hash)
+                    if new_h is None:
+                        new_h = self.heuristic(current_state)
+                        heuristic_cache[new_hash] = new_h
                     new_f = new_g + new_h
                     new_state = current_state.clone()
                     heapq.heappush(
                         queue,
-                        (new_f, count, new_g, new_state, path + [move] + auto_moves),
+                        (new_f, count, new_g, new_state, new_hash),
                     )
 
                 for i in range(len(auto_moves) - 1, -1, -1):
@@ -952,10 +1020,4 @@ class FreeCellSolver:
             "search_time": search_time,
             "expanded_nodes": expanded_nodes,
         }
-                    
-            
-        
-        
-        
-            
- 
+

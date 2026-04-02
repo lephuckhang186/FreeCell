@@ -23,9 +23,11 @@ from .constants import (
     COLOR_SLOT,
     COLOR_SLOT_BORDER,
     COLOR_TEXT,
+    COLOR_GAME_OVER,
     COLOR_WIN,
     HEADER_HEIGHT,
     SHADOW_ALPHA,
+    SOLVER_AUTOSOLVE_TIMEOUT_S,
 )
 from .layout import BoardLayout
 from .models import Card, SUIT_SYMBOLS, Suit, is_red
@@ -236,3 +238,20 @@ class Renderer:
         sub = self.font_title.render("Press R for a new deal", True, COLOR_TEXT)
         self.screen.blit(txt, txt.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 24)))
         self.screen.blit(sub, sub.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 24)))
+
+    def draw_solver_timeout_game_over_overlay(self) -> None:
+        """Shown when auto-solve exceeds SOLVER_AUTOSOLVE_TIMEOUT_S."""
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 140))
+        self.screen.blit(overlay, (0, 0))
+        title = self.font_win.render("GAME OVER", True, COLOR_GAME_OVER)
+        sub = self.font_title.render(
+            f"Auto-solve qua {SOLVER_AUTOSOLVE_TIMEOUT_S // 60} phut",
+            True,
+            COLOR_TEXT,
+        )
+        hint = self.font_small.render("Nhan R hoac New de choi lai", True, COLOR_TEXT)
+        cx, cy = self.screen.get_width() // 2, self.screen.get_height() // 2
+        self.screen.blit(title, title.get_rect(center=(cx, cy - 40)))
+        self.screen.blit(sub, sub.get_rect(center=(cx, cy + 8)))
+        self.screen.blit(hint, hint.get_rect(center=(cx, cy + 52)))

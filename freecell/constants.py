@@ -8,6 +8,9 @@ SCREEN_HEIGHT = 820
 FPS = 120
 TITLE = "FreeCell (pygame)"
 
+# Auto-solve (background thread): max wall time before UI declares game over
+SOLVER_AUTOSOLVE_TIMEOUT_S = 5 * 60  # 5 minutes
+
 # Card geometry
 CARD_WIDTH = 110
 CARD_HEIGHT = 150
@@ -36,6 +39,7 @@ COLOR_SHADOW = (0, 0, 0)
 COLOR_TEXT = (238, 245, 238)
 COLOR_HINT = (255, 224, 120)
 COLOR_WIN = (255, 255, 180)
+COLOR_GAME_OVER = (255, 140, 140)
 
 # Animation tuning
 DRAG_SMOOTH_FACTOR = 0.28
