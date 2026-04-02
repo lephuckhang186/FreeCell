@@ -60,6 +60,8 @@ class CardAnimation:
 
 
 class FreeCellGame:
+    DEFAULT_TESTCASE_NUM = 4
+
     def _compute_window_size(self) -> tuple[int, int]:
         """Pick a windowed size that always fits desktop bounds."""
         desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
@@ -78,7 +80,7 @@ class FreeCellGame:
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = generate_state_testcase(1)
+        self.state: GameState = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -106,7 +108,7 @@ class FreeCellGame:
         self.status_until = time() + seconds
 
     def new_game(self) -> None:
-        self.state = generate_state_testcase(1)
+        self.state = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None

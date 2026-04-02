@@ -525,51 +525,173 @@ class FreeCellSolver:
     def ids_solving(self, max_depth: int = 100):
         start_time = time.time()
         expanded_nodes = 0
-        
-        for depth_limit in range(1, max_depth + 1):
-            # DLS iteration
-            stack = [(self.initial_state, [], 0)]  # (state, path, current_depth)
-            visited = {}
-            visited[self.hash_state(self.initial_state)] = 0
-            
-            while stack:
-                if expanded_nodes % 2000 == 0:
-                    time.sleep(0.001)  # Yield GIL cho giao dien pygame
-                    
-                current_state, path, current_depth = stack.pop()
-                expanded_nodes += 1
-                self._report_stats("IDS", start_time, expanded_nodes, len(stack), current_depth)
-                
-                if self.is_win_state(current_state):
-                    search_time = time.time() - start_time
-                    memory_usage = sys.getsizeof(visited) + sys.getsizeof(stack)
-                    return {
-                        "path": path,
-                        "search_time": search_time,
-                        "expanded_nodes": expanded_nodes,
-                        "search_length": len(path),
-                        "memory_usage_bytes": memory_usage,
-                        "depth_reached": depth_limit
-                    }
-                    
-                # Stop expanding this branch if we reached the depth limit
-                if current_depth >= depth_limit:
+
+        # global_visited: hash -> max_depth_remaining_when_reached
+        global_visited = {}
+
+        def dls(state, depth_limit, current_depth, last_move, path, path_set):
+            nonlocal expanded_nodes
+            expanded_nodes += 1
+
+            if expanded_nodes % 100_000 == 0:
+                self._report_stats(
+                    "IDS", start_time, expanded_nodes, len(path), current_depth
+                )
+
+            if self.is_win_state(state):
+                return list(path)
+
+            if current_depth >= depth_limit:
+                return None
+
+            remaining = depth_limit - current_depth
+
+            # Pure IDS: Lấy tất cả nước đi hợp lệ
+            for move in self.get_all_possible_move(state):
+                if last_move and move[0] == last_move[1] and move[1] == last_move[0]:
                     continue
-                    
-                for move in self.get_all_possible_move(current_state):
-                    new_state = current_state.clone()
-                    apply_move(new_state, move[0], move[1], move[2])
-                    
-                    state_hash = self.hash_state(new_state)
-                    new_depth = current_depth + 1
-                    
-                    # Only add if unvisited OR found a shorter path to it in this iteration
-                    if state_hash not in visited or visited[state_hash] > new_depth:
-                        visited[state_hash] = new_depth
-                        stack.append((new_state, path + [move], new_depth))
-                        
+
+                _, moved = apply_move(state, move[0], move[1], move[2])
+                auto_moves, auto_cards = self._auto_move_to_foundation_v2(state)
+
+                s_hash = self.hash_state(state)
+                # Pruning dựa trên không gian trạng thái đã duyệt và Cycle Detection
+                if (
+                    s_hash in global_visited and global_visited[s_hash] >= remaining - 1
+                ) or (s_hash in path_set):
+                    from .rules import undo_move
+                    for i in range(len(auto_moves) - 1, -1, -1):
+                        undo_move(
+                            state, auto_moves[i][0], auto_moves[i][1], auto_cards[i]
+                        )
+                    undo_move(state, move[0], move[1], moved)
+                    continue
+
+                global_visited[s_hash] = remaining - 1
+                path_set.add(s_hash)
+                path.append(move)
+                path.extend(auto_moves)
+
+                result = dls(
+                    state, depth_limit, current_depth + 1, move, path, path_set
+                )
+                if result is not None:
+                    return result
+
+                # Backtrack
+                for _ in range(len(auto_moves) + 1):
+                    path.pop()
+                path_set.remove(s_hash)
+
+                from .rules import undo_move
+                for i in range(len(auto_moves) - 1, -1, -1):
+                    undo_move(state, auto_moves[i][0], auto_moves[i][1], auto_cards[i])
+                undo_move(state, move[0], move[1], moved)
+
+            return None
+
+        # Main IDS loop
+        initial_state = self.initial_state.clone()
+        init_auto, _ = self._auto_move_to_foundation_v2(initial_state)
+        init_hash = self.hash_state(initial_state)
+
+        if self.is_win_state(initial_state):
+            return {
+                "path": init_auto,
+                "search_time": time.time() - start_time,
+                "expanded_nodes": expanded_nodes,
+            }
+
+        for d_limit in range(1, max_depth + 1):
+            path_set = {init_hash}
+            res = dls(initial_state, d_limit, 0, None, list(init_auto), path_set)
+
+            if res is not None:
+                memory_usage = (
+                    sys.getsizeof(global_visited)
+                    + len(global_visited) * (sys.getsizeof(init_hash) + 28)
+                    + sys.getsizeof(path_set)
+                )
+                return {
+                    "path": res,
+                    "search_time": time.time() - start_time,
+                    "expanded_nodes": expanded_nodes,
+                    "search_length": len(res),
+                    "depth_reached": d_limit,
+                    "memory_usage_bytes": memory_usage,
+                }
+
         search_time = time.time() - start_time
-        return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes, "depth_reached": max_depth}
+        return {
+            "path": None,
+            "search_time": search_time,
+            "expanded_nodes": expanded_nodes,
+            "memory_usage_bytes": sys.getsizeof(global_visited)
+            + len(global_visited) * (sys.getsizeof(init_hash) + 28),
+        }
+
+    def _auto_move_to_foundation_v2(self, state: GameState):
+        """Tự động đẩy bài an toàn lên foundation (không tốn depth)."""
+        from .models import Suit
+        _SUITS = list(Suit)
+        _SUIT_TO_IDX = {s: i for i, s in enumerate(_SUITS)}
+
+        auto_moves = []
+        auto_cards = []
+        changed = True
+        while changed:
+            changed = False
+            for i, card in enumerate(state.free_cells):
+                if card and self._is_safe_to_foundation_v2(card, state):
+                    src, dst = (
+                        PileRef(PileType.FREECELL, i),
+                        PileRef(PileType.FOUNDATION, _SUIT_TO_IDX[card.suit]),
+                    )
+                    _, moved = apply_move(state, src, dst, -1)
+                    auto_moves.append((src, dst, -1))
+                    auto_cards.append(moved)
+                    changed = True
+                    break
+            if changed:
+                continue
+            for i, col in enumerate(state.tableau):
+                if col and self._is_safe_to_foundation_v2(col[-1], state):
+                    card = col[-1]
+                    src, dst = (
+                        PileRef(PileType.TABLEAU, i),
+                        PileRef(PileType.FOUNDATION, _SUIT_TO_IDX[card.suit]),
+                    )
+                    si = len(col) - 1
+                    _, moved = apply_move(state, src, dst, si)
+                    auto_moves.append((src, dst, si))
+                    auto_cards.append(moved)
+                    changed = True
+                    break
+        return auto_moves, auto_cards
+
+    def _is_safe_to_foundation_v2(self, card, state) -> bool:
+        from .models import Suit
+        suit = card.suit
+        rank = card.rank
+
+        foundation_top = len(state.foundations.get(suit, []))
+        if rank != foundation_top + 1:
+            return False
+
+        opposite_suits = {
+            Suit.SPADES: [Suit.HEARTS, Suit.DIAMONDS],
+            Suit.CLUBS: [Suit.HEARTS, Suit.DIAMONDS],
+            Suit.HEARTS: [Suit.SPADES, Suit.CLUBS],
+            Suit.DIAMONDS: [Suit.SPADES, Suit.CLUBS],
+        }
+
+        if rank <= 2:
+            return True
+
+        for opp in opposite_suits[suit]:
+            if len(state.foundations.get(opp, [])) < rank - 1:
+                return False
+        return True
     
     
     def get_move_cost(self, current_state: GameState, move: tuple[PileRef, PileRef, int], config: MoveCostConfig = MoveCostConfig('ucs')) -> float:
@@ -663,31 +785,31 @@ class FreeCellSolver:
 
     def ucs_solving(self):
         """Uniform Cost Search - Trọng số g(n) = tổng cost của từng nước đi (get_move_cost)"""
+        from .rules import undo_move
         start_time = time.time()
         expanded_nodes = 0
-        
-        # Priority Queue lưu: (cost, tie_breaker, state, path)
-        count = 0
-        queue = [(0.0, count, self.initial_state, [])]
-        best_cost = {self.hash_state(self.initial_state): 0.0}  # Lưu chi phí tốt nhất đến mỗi state
 
-        # Dùng một config duy nhất để tính điểm
-        config = MoveCostConfig('ucs')
-        
+        count = 0
+        initial_state = self.initial_state.clone()
+        init_auto, _ = self._auto_move_to_foundation_v2(initial_state)
+
+        queue = [(0.0, count, initial_state, init_auto)]
+        best_cost = {self.hash_state(initial_state): 0.0}
+        config = MoveCostConfig("ucs")
+
         while queue:
             if expanded_nodes % 2000 == 0:
                 time.sleep(0.001)
-            
+
             cost, _, current_state, path = heapq.heappop(queue)
             state_hash = self.hash_state(current_state)
-            
-            # Bỏ qua nếu đã có đường đi tốt hơn
+
             if state_hash in best_cost and best_cost[state_hash] < cost - 0.001:
                 continue
-            
+
             expanded_nodes += 1
             self._report_stats("UCS", start_time, expanded_nodes, len(queue), len(path))
-            
+
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
                 memory_usage = sys.getsizeof(best_cost) + sys.getsizeof(queue)
@@ -697,26 +819,36 @@ class FreeCellSolver:
                     "expanded_nodes": expanded_nodes,
                     "search_length": len(path),
                     "total_cost": cost,
-                    "memory_usage_bytes": memory_usage
+                    "memory_usage_bytes": memory_usage,
                 }
-            
+
             for move in self.get_all_possible_move(current_state):
-                new_state = current_state.clone()
-                apply_move(new_state, move[0], move[1], move[2])
-                
-                new_hash = self.hash_state(new_state)
-                
-                # Tính cost cho nước đi
                 move_cost = self.get_move_cost(current_state, move, config)
                 new_cost = cost + move_cost
-                
-                # Chỉ thêm nếu tìm được đường đi tốt hơn
+
+                _, moved = apply_move(current_state, move[0], move[1], move[2])
+                auto_moves, auto_cards = self._auto_move_to_foundation_v2(current_state)
+
+                new_hash = self.hash_state(current_state)
                 if new_hash not in best_cost or new_cost < best_cost[new_hash] - 0.001:
                     best_cost[new_hash] = new_cost
                     count += 1
-                    heapq.heappush(queue, (new_cost, count, new_state, path + [move]))
-        
-        return {"path": None, "search_time": time.time() - start_time, "expanded_nodes": expanded_nodes}
+                    new_state = current_state.clone()
+                    heapq.heappush(
+                        queue, (new_cost, count, new_state, path + [move] + auto_moves)
+                    )
+
+                for i in range(len(auto_moves) - 1, -1, -1):
+                    undo_move(
+                        current_state, auto_moves[i][0], auto_moves[i][1], auto_cards[i]
+                    )
+                undo_move(current_state, move[0], move[1], moved)
+
+        return {
+            "path": None,
+            "search_time": time.time() - start_time,
+            "expanded_nodes": expanded_nodes,
+        }
             
     
     def heuristic(self, state: GameState) -> int:
@@ -739,11 +871,11 @@ class FreeCellSolver:
                         h_score += 2
                 
                 # Phạt nếu đè lên lá đang cần đưa lên Foundation ngay lập tức
-                foundation_pile = state.foundations.get(card.suit.value, [])
+                foundation_pile = state.foundations.get(card.suit, [])
                 next_needed_rank = len(foundation_pile) + 1
                 if card.rank == next_needed_rank:
                     cards_blocking = len(col) - 1 - i
-                    h_score += cards_blocking * 4 # Phạt rất nặng vì cản trở tiến độ
+                    h_score += cards_blocking * 10
                     
         # 3. Phạt Freecell bị chiếm dụng (mất đi không gian trung chuyển)
         occupied_fc = sum(1 for c in state.free_cells if c is not None)
@@ -753,30 +885,33 @@ class FreeCellSolver:
     
     def astar_solving(self):
         """A* Search - Đánh giá ưu tiên f(n) = g(n) + h(n)"""
+        from .rules import undo_move
         start_time = time.time()
         expanded_nodes = 0
-        
-        # Priority Queue lưu: (f_score, tie_breaker, g_cost, state, path)
+
         count = 0
-        start_h = self.heuristic(self.initial_state)
-        queue = [(start_h, count, 0.0, self.initial_state, [])]
+        initial_state = self.initial_state.clone()
+        init_auto, _ = self._auto_move_to_foundation_v2(initial_state)
+
+        start_h = self.heuristic(initial_state)
+        queue = [(start_h, count, 0.0, initial_state, init_auto)]
         visited = set()
-        config = MoveCostConfig('astar')
-        
+        config = MoveCostConfig("astar")
+
         while queue:
             if expanded_nodes % 2000 == 0:
-                time.sleep(0.001)  # Yield GIL cho giao dien pygame
-                
-            f_score, _, g_cost, current_state, path = heapq.heappop(queue)
-            
+                time.sleep(0.001)
+
+            _, _, g_cost, current_state, path = heapq.heappop(queue)
+
             state_hash = self.hash_state(current_state)
             if state_hash in visited:
                 continue
             visited.add(state_hash)
-            
+
             expanded_nodes += 1
             self._report_stats("A*", start_time, expanded_nodes, len(queue), len(path))
-            
+
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
                 memory_usage = sys.getsizeof(visited) + sys.getsizeof(queue)
@@ -785,24 +920,38 @@ class FreeCellSolver:
                     "search_time": search_time,
                     "expanded_nodes": expanded_nodes,
                     "search_length": len(path),
-                    "memory_usage_bytes": memory_usage
+                    "memory_usage_bytes": memory_usage,
                 }
-            
+
             for move in self.get_all_possible_move(current_state):
-                new_state = current_state.clone()
-                apply_move(new_state, move[0], move[1], move[2])
-                
-                if self.hash_state(new_state) not in visited:
+                move_cost = self.get_move_cost(current_state, move, config)
+                new_g = g_cost + move_cost
+
+                _, moved = apply_move(current_state, move[0], move[1], move[2])
+                auto_moves, auto_cards = self._auto_move_to_foundation_v2(current_state)
+
+                if self.hash_state(current_state) not in visited:
                     count += 1
-                    move_cost = self.get_move_cost(current_state, move, config)
-                    new_g = g_cost + move_cost
-                    new_h = self.heuristic(new_state)
+                    new_h = self.heuristic(current_state)
                     new_f = new_g + new_h
-                    
-                    heapq.heappush(queue, (new_f, count, new_g, new_state, path + [move]))
-            
+                    new_state = current_state.clone()
+                    heapq.heappush(
+                        queue,
+                        (new_f, count, new_g, new_state, path + [move] + auto_moves),
+                    )
+
+                for i in range(len(auto_moves) - 1, -1, -1):
+                    undo_move(
+                        current_state, auto_moves[i][0], auto_moves[i][1], auto_cards[i]
+                    )
+                undo_move(current_state, move[0], move[1], moved)
+
         search_time = time.time() - start_time
-        return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
+        return {
+            "path": None,
+            "search_time": search_time,
+            "expanded_nodes": expanded_nodes,
+        }
                     
             
         
