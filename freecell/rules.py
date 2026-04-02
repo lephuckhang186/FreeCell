@@ -168,3 +168,31 @@ def apply_move(state: GameState, src: PileRef, dst: PileRef, start_index: int = 
     state.won = all(len(pile) == 13 for pile in state.foundations.values())
     return check, moved
 
+
+def undo_move(state: GameState, src: PileRef, dst: PileRef, moved_cards: list[Card]) -> None:
+    """Revert a previously applied move."""
+    if not moved_cards:
+        return
+    
+    # 1. Remove from dst
+    num_cards = len(moved_cards)
+    if dst.kind == PileType.TABLEAU:
+        del state.tableau[dst.index][-num_cards:]
+    elif dst.kind == PileType.FREECELL:
+        state.free_cells[dst.index] = None
+    elif dst.kind == PileType.FOUNDATION:
+        suit = list(Suit)[dst.index]
+        state.foundations[suit].pop()
+    
+    # 2. Push back to src
+    if src.kind == PileType.TABLEAU:
+        state.tableau[src.index].extend(moved_cards)
+    elif src.kind == PileType.FREECELL:
+        state.free_cells[src.index] = moved_cards[0]
+    elif src.kind == PileType.FOUNDATION:
+        suit = list(Suit)[src.index]
+        state.foundations[suit].append(moved_cards[0])
+    
+    # 3. Update win state
+    state.won = False
+
