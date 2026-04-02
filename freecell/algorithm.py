@@ -9,6 +9,16 @@ import heapq
 DEBUG_STATS = True
 REPORT_INTERVAL = 1000
 
+# ===== BFS DEBUG CONFIG =====
+# BFS_DEBUG_LEVEL:
+#   0 = Tắt hoàn toàn
+#   1 = Chỉ in thống kê tổng (mỗi BFS_DEBUG_INTERVAL node)
+#   2 = In chi tiết mỗi node được expand (state + số moves sinh)
+#   3 = In CỰC chi tiết: từng move được xét, skip hay thêm vào queue
+BFS_DEBUG_LEVEL = 1
+BFS_DEBUG_INTERVAL = 500   # In thống kê mỗi bao nhiêu node (level 1)
+BFS_NODE_LIMIT   = 50      # Chỉ in chi tiết node/move cho N node đầu (level 2,3)
+
 
 class MoveCostConfig:
     """Cấu hình cho move_cost function."""
@@ -131,7 +141,113 @@ class FreeCellSolver:
             prev_card = candidate
         return sequences
 
-    def get_all_possible_move(self, state: GameState):
+    # ===== DEBUG HELPER =====
+    def _fmt_card(self, card) -> str:
+        """Hiển thị card dạng '5H', 'KC', 'A♠' v.v."""
+        if card is None:
+            return '__'
+        rank_map = {1: 'A', 11: 'J', 12: 'Q', 13: 'K'}
+        r = rank_map.get(card.rank, str(card.rank))
+        s = card.suit.value[0].upper()  # C, D, H, S
+        return f"{r}{s}"
+
+    def _fmt_pile(self, pile_ref: PileRef) -> str:
+        """Hiển thị tên pile dạng 'TAB[3]', 'FC[1]', 'FND[2]'."""
+        short = {PileType.TABLEAU: 'TAB', PileType.FREECELL: 'FC', PileType.FOUNDATION: 'FND'}
+        return f"{short[pile_ref.kind]}[{pile_ref.index}]"
+
+    def _fmt_move(self, state: GameState, move: tuple) -> str:
+        """Hiển thị nước đi dạng '5H,4S TAB[2]->TAB[5]'."""
+        src, dst, start_idx = move
+        cards = pick_cards(state, src, start_idx)
+        cards_str = ','.join(self._fmt_card(c) for c in cards) if cards else '?'
+        return f"{cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}"
+
+    def _fmt_state_brief(self, state: GameState) -> str:
+        """Tóm tắt state: foundation ranks + số ô FC trống + số cột trống."""
+        fnd = []
+        for s in ('C', 'D', 'H', 'S'):
+            pile = state.foundations.get(s, [])
+            fnd.append(f"{s}:{pile[-1].rank if pile else 0}")
+        fc_empty = sum(1 for c in state.free_cells if c is None)
+        tab_empty = sum(1 for col in state.tableau if not col)
+        fc_cards = [self._fmt_card(c) for c in state.free_cells]
+        return (f"FND=[{','.join(fnd)}] "
+                f"FC=[{','.join(fc_cards)}]({fc_empty} trống) "
+                f"TAB_empty={tab_empty}")
+    # ===== END DEBUG HELPER =====
+
+    # ===== OPTIMIZATION 2: AUTO-FOUNDATION (Forced Moves) =====
+    def _is_safe_to_foundation(self, state: GameState, card) -> bool:
+        """
+        Stovely's Rule: Đưa lá bài lên Foundation là AN TOÀN nếu:
+        - Là Ace (rank 1) → LUÔN an toàn
+        - Là 2 → an toàn nếu Ace cùng chất đã lên Foundation
+        - Là rank r (đỏ) → an toàn nếu cả 2 chất đen đã có >= r-1 trên Foundation
+        - Là rank r (đen) → an toàn nếu cả 2 chất đỏ đã có >= r-1 trên Foundation
+        Nghĩa là: lá bài này sẽ không bao giờ cần lấy xuống lại.
+        """
+        from .models import Suit
+        if card.rank <= 2:
+            return True
+        needed_below = card.rank - 2  # Lá đối màu cần có trên Foundation
+        if is_red(card.suit):
+            # Cần cả 2 chất đen (Clubs, Spades) có rank >= needed_below
+            black_suits = [Suit.CLUBS, Suit.SPADES]
+            return all(
+                len(state.foundations.get(s, [])) >= needed_below
+                for s in black_suits
+            )
+        else:
+            # Cần cả 2 chất đỏ (Diamonds, Hearts) có rank >= needed_below
+            red_suits = [Suit.DIAMONDS, Suit.HEARTS]
+            return all(
+                len(state.foundations.get(s, [])) >= needed_below
+                for s in red_suits
+            )
+
+    def _apply_forced_foundations(self, state: GameState) -> tuple[bool, list]:
+        """
+        Áp dụng tất cả nước Foundation bắt buộc/an toàn liên tục.
+        Trả về (any_applied, moves_applied) — LIST MOVES được thêm vào path
+        để game replay có thể thực hiện chính xác (không bị thiếu bước Foundation).
+        """
+        any_applied = False
+        moves_applied = []   # <-- Mới: ghi lại từng move được áp dụng
+        changed = True
+        while changed:
+            changed = False
+            # Kiểm tra từng freecell
+            for fc_idx, card in enumerate(state.free_cells):
+                if card is None:
+                    continue
+                src = PileRef(PileType.FREECELL, fc_idx)
+                for f_idx in range(4):
+                    dst = PileRef(PileType.FOUNDATION, f_idx)
+                    if validate_move(state, src, dst, [card]).ok and self._is_safe_to_foundation(state, card):
+                        apply_move(state, src, dst, -1)
+                        moves_applied.append((src, dst, -1))  # Ghi lại move
+                        changed = True
+                        any_applied = True
+                        break
+            # Kiểm tra top card của từng cột tableau
+            for col_idx, col in enumerate(state.tableau):
+                if not col:
+                    continue
+                card = col[-1]
+                src = PileRef(PileType.TABLEAU, col_idx)
+                for f_idx in range(4):
+                    dst = PileRef(PileType.FOUNDATION, f_idx)
+                    if validate_move(state, src, dst, [card]).ok and self._is_safe_to_foundation(state, card):
+                        apply_move(state, src, dst, -1)
+                        moves_applied.append((src, dst, -1))  # Ghi lại move
+                        changed = True
+                        any_applied = True
+                        break
+        return any_applied, moves_applied
+    # ===== END AUTO-FOUNDATION =====
+
+    def get_all_possible_move(self, state: GameState, _debug: bool = False):
         moves = []
 
         tableau_sources = [
@@ -166,6 +282,10 @@ class FreeCellSolver:
         dst_foundations = [PileRef(PileType.FOUNDATION, i) for i in range(4)]
         dst_piles = dst_tableau + dst_freecells + dst_foundations
 
+        # ── OPTIMIZATION 3: Pre-compute thông tin để prune ──
+        empty_tab_count = sum(1 for col in state.tableau if not col)
+
+        rejected = []  # chỉ dùng khi _debug=True ở level 3
         for src in src_piles:
             if src.kind == PileType.TABLEAU:
                 sequences = self._tableau_sequences(state.tableau[src.index])
@@ -186,6 +306,32 @@ class FreeCellSolver:
                     if allow_multi and seq_len > max_cards:
                         continue
 
+                    # ── OPTIMIZATION 3a: Bỏ qua move cột-đơn vào cột-trống khi >=2 cột trống ──
+                    # Di chuyển 1 lá đơn sang cột trống sẽ tạo thêm 1 cột trống khác:
+                    # nếu đã có >=2 cột trống → việc này chỉ hoán đổi vị trí, vô ích.
+                    if (dst.kind == PileType.TABLEAU
+                            and not state.tableau[dst.index]   # dst là cột trống
+                            and src.kind == PileType.TABLEAU
+                            and start_index == len(state.tableau[src.index]) - 1  # chỉ 1 lá trên đầu
+                            and empty_tab_count >= 2):
+                        if _debug and BFS_DEBUG_LEVEL >= 3:
+                            cards = pick_cards(state, src, start_index)
+                            cards_str = ','.join(self._fmt_card(c) for c in cards)
+                            rejected.append(f"      [PRUNE-3a] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: cột trống dư thừa")
+                        continue
+
+                    # ── OPTIMIZATION 3b: Bỏ qua move toàn cột vào cột trống khi src chỉ có 1 lá ──
+                    # Cột 1 lá duy nhất di sang cột trống = chỉ đổi index, k thay đổi gì
+                    if (dst.kind == PileType.TABLEAU
+                            and not state.tableau[dst.index]
+                            and src.kind == PileType.TABLEAU
+                            and len(state.tableau[src.index]) == 1):
+                        if _debug and BFS_DEBUG_LEVEL >= 3:
+                            cards = pick_cards(state, src, start_index)
+                            cards_str = ','.join(self._fmt_card(c) for c in cards)
+                            rejected.append(f"      [PRUNE-3b] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: cột 1 lá vào trống")
+                        continue
+
                     cards = pick_cards(state, src, start_index)
                     if not cards:
                         continue
@@ -193,6 +339,16 @@ class FreeCellSolver:
                     result = validate_move(state, src, dst, cards)
                     if result.ok:
                         moves.append((src, dst, start_index))
+                    elif _debug and BFS_DEBUG_LEVEL >= 3:
+                        cards_str = ','.join(self._fmt_card(c) for c in cards)
+                        rejected.append(f"      [REJECT] {cards_str} {self._fmt_pile(src)}->{self._fmt_pile(dst)}: {result.reason}")
+
+        if _debug and BFS_DEBUG_LEVEL >= 3 and rejected:
+            print(f"    [BFS][MOVES] Bị loại/Prune ({len(rejected)} move):")
+            for r in rejected[:10]:  # Chỉ in tối đa 10 để tránh spam
+                print(r)
+            if len(rejected) > 10:
+                print(f"      ... và {len(rejected) - 10} move bị loại khác")
 
         # Kỹ thuật: Move Sorting - Ép các nước đi lên Foundation xếp lên hàng ưu tiên số 1
         # Trọng số:
@@ -210,28 +366,104 @@ class FreeCellSolver:
             return 2
 
         moves.sort(key=_score_move)
-        
         return moves
     
     def bfs_solving(self):
+        """
+        BFS tối ưu với 3 kỹ thuật:
+        1. Parent Tracking: Không lưu path trong queue → tiết kiệm bộ nhớ O(N×depth) → O(N)
+        2. Auto-Foundation: Áp dụng ngay forced moves (Stovely's rule) sau mỗi clone
+        3. Dead-Move Pruning: Lọc bỏ moves vô ích trước khi thêm vào queue
+        """
         start_time = time.time()
         expanded_nodes = 0
-        
-        queue = deque([(self.initial_state, [])])
-        visited = set()
-        visited.add(self.hash_state(self.initial_state))
-        
+
+        # ── Áp dụng forced foundations cho state ban đầu và ghi lại moves ──
+        initial_state_norm = self.initial_state.clone()
+        _, initial_forced_moves = self._apply_forced_foundations(initial_state_norm)
+        initial_hash = self.hash_state(initial_state_norm)
+
+        # ── BFS DEBUG: Khởi động ──
+        if BFS_DEBUG_LEVEL >= 1:
+            print("\n" + "=" * 60)
+            print("[BFS] BẮT ĐẦU TÌM KIẾM (đã tối ưu: Parent Tracking + Auto-Foundation + Pruning)")
+            print(f"[BFS] State ban đầu (sau forced): {self._fmt_state_brief(initial_state_norm)}")
+            print("=" * 60)
+
+        # ── OPTIMIZATION 1: Parent Tracking ──
+        # parent dict: hash → (parent_hash, moves_segment)
+        # moves_segment = [explicit_move] + forced_moves (tất cả moves cần để game replay)
+        # None tại initial_hash = root (không có parent)
+        parent: dict[bytes, tuple | None] = {initial_hash: None}
+        queue: deque[tuple[GameState, bytes, int]] = deque(
+            [(initial_state_norm, initial_hash, 0)]
+        )
+
+        if BFS_DEBUG_LEVEL >= 2:
+            print(f"[BFS] Hash state ban đầu: {initial_hash.hex()[:20]}...")
+            print(f"[BFS] Queue khởi tạo: {len(queue)} node")
+
         while queue:
-            if expanded_nodes % 2000 == 0:
+            # FIX: Chỉ yield GIL khi đã expand ít nhất 1 node (tránh sleep trước khi bắt đầu)
+            if expanded_nodes > 0 and expanded_nodes % 2000 == 0:
                 time.sleep(0.001)  # Yield GIL cho giao dien pygame
-                
-            current_state, path = queue.popleft()
+
+            # FIX: Lấy hash được lưu sẵn trong queue thay vì tính lại O(N)
+            current_state, current_hash, depth = queue.popleft()
             expanded_nodes += 1
-            self._report_stats("BFS", start_time, expanded_nodes, len(queue), len(path))
-            
+
+            # ── BFS DEBUG level 1: Thống kê theo interval ──
+            if BFS_DEBUG_LEVEL >= 1 and expanded_nodes % BFS_DEBUG_INTERVAL == 0:
+                elapsed = time.time() - start_time
+                print(f"[BFS][STAT] node={expanded_nodes:,}  queue={len(queue):,}  "
+                      f"visited={len(parent):,}  depth={depth}  "
+                      f"elapsed={elapsed:.2f}s")
+
+            # ── BFS DEBUG level 2: Chi tiết từng node ──
+            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
+                par_entry = parent.get(current_hash)
+                last_move_str = "(gốc)"
+                if par_entry is not None:
+                    last_move_str = self._fmt_move(current_state, par_entry[1])
+                print(f"\n[BFS][NODE #{expanded_nodes}] depth={depth}  queue_size={len(queue)}")
+                print(f"  State: {self._fmt_state_brief(current_state)}")
+                print(f"  Nước vừa đi: {last_move_str}")
+
+            self._report_stats("BFS", start_time, expanded_nodes, len(queue), depth)
+
             if self.is_win_state(current_state):
                 search_time = time.time() - start_time
-                memory_usage = sys.getsizeof(visited) + sys.getsizeof(queue) # Ước lượng bytes
+                memory_usage = sys.getsizeof(parent) + sys.getsizeof(queue)
+
+                # ── Reconstruct path từ parent dict (bao gồm cả forced moves) ──
+                path = []
+                h = current_hash
+                while parent[h] is not None:
+                    par_hash, moves_segment = parent[h]  # moves_segment là list moves
+                    path.extend(reversed(moves_segment))  # Thêm ngược (sẽ reverse sau)
+                    h = par_hash
+                path.reverse()  # Từ gốc → goal
+                # Thêm forced moves của initial state (nếu có) vào đầu path
+                path = initial_forced_moves + path
+
+                # ── BFS DEBUG: Kết quả thắng ──
+                if BFS_DEBUG_LEVEL >= 1:
+                    print("\n" + "=" * 60)
+                    print(f"[BFS] ✅ TÌM THẤY LỜI GIẢI!")
+                    print(f"[BFS]   Số bước: {len(path)}")
+                    print(f"[BFS]   Số node đã expand: {expanded_nodes:,}")
+                    print(f"[BFS]   Kích thước queue cuối: {len(queue):,}")
+                    print(f"[BFS]   Số state đã thăm: {len(parent):,}")
+                    print(f"[BFS]   Thời gian: {search_time:.4f}s")
+                    print(f"[BFS]   Bộ nhớ (ước lượng): {memory_usage:,} bytes")
+                    print("=" * 60)
+                if BFS_DEBUG_LEVEL >= 2:
+                    print("[BFS] Chuỗi nước đi (path):")
+                    trace_state = self.initial_state.clone()
+                    for i, mv in enumerate(path):
+                        print(f"  Bước {i+1:3d}: {self._fmt_move(trace_state, mv)}")
+                        apply_move(trace_state, mv[0], mv[1], mv[2])
+
                 return {
                     "path": path,
                     "search_time": search_time,
@@ -239,18 +471,54 @@ class FreeCellSolver:
                     "search_length": len(path),
                     "memory_usage_bytes": memory_usage
                 }
-            
-            for move in self.get_all_possible_move(current_state):
-                # Thực hiện copy và apply_move thật sự để tạo state mới (sửa lỗi code cũ mất apply_move)
+
+            # ── Sinh moves và mở rộng node ──
+            use_detail = BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT
+            possible_moves = self.get_all_possible_move(current_state, _debug=use_detail)
+
+            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
+                print(f"  Sinh được {len(possible_moves)} move hợp lệ")
+
+            added_count = 0
+            skipped_count = 0
+            for move in possible_moves:
                 new_state = current_state.clone()
                 apply_move(new_state, move[0], move[1], move[2])
-                
+
+                # ── OPTIMIZATION 2: Áp dụng forced foundations và ghi lại moves ──
+                _, forced_moves = self._apply_forced_foundations(new_state)
+
                 state_hash = self.hash_state(new_state)
-                if state_hash not in visited:
-                    visited.add(state_hash)
-                    queue.append((new_state, path + [move]))
-            
+                if state_hash not in parent:
+                    # Lưu moves_segment = [explicit_move] + forced_moves
+                    # để path reconstruction bao gồm TẤT CẢ moves cho game replay
+                    moves_segment = [move] + forced_moves
+                    parent[state_hash] = (current_hash, moves_segment)
+                    queue.append((new_state, state_hash, depth + 1))
+                    added_count += 1
+
+                    if BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT:
+                        print(f"    [ADD ] {self._fmt_move(current_state, move)}  "
+                              f"hash={state_hash.hex()[:12]}...")
+                else:
+                    skipped_count += 1
+                    if BFS_DEBUG_LEVEL >= 3 and expanded_nodes <= BFS_NODE_LIMIT:
+                        print(f"    [SKIP] {self._fmt_move(current_state, move)}  (đã thăm)")
+
+            if BFS_DEBUG_LEVEL >= 2 and expanded_nodes <= BFS_NODE_LIMIT:
+                print(f"  > Thêm vào queue: {added_count}  |  Skip (đã thăm): {skipped_count}")
+
         search_time = time.time() - start_time
+
+        # ── BFS DEBUG: Không tìm được lời giải ──
+        if BFS_DEBUG_LEVEL >= 1:
+            print("\n" + "=" * 60)
+            print(f"[BFS] ❌ KHÔNG TÌM THẤY LỜI GIẢI")
+            print(f"[BFS]   Số node đã expand: {expanded_nodes:,}")
+            print(f"[BFS]   Số state đã thăm: {len(parent):,}")
+            print(f"[BFS]   Thời gian: {search_time:.4f}s")
+            print("=" * 60)
+
         return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
     
 
