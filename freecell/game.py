@@ -98,6 +98,7 @@ class FreeCellGame:
         self.game_id: int = 2  # endgame demo (BFS ~4 moves)
         self.score: int = 0
         self.elapsed: float = 0.0
+        self.moves: int = 0
         self.pressed_button_label: str = ""
         self.pressed_button_until: float = 0.0
 
@@ -121,6 +122,7 @@ class FreeCellGame:
         self.solution_moves = []
         self.score = 0
         self.elapsed = 0.0
+        self.moves = 0
         self.pressed_button_label = ""
         self.pressed_button_until = 0.0
 
@@ -129,36 +131,43 @@ class FreeCellGame:
         self.score = max(0, self.score + delta)
 
     def action_buttons(self) -> list[tuple[str, pygame.Rect]]:
-        """Bottom toolbar: [New][Undo][Hint][DFS][BFS][UCS][A*] left | [More] right."""
+        """Top right toolbar: Main buttons and Algo buttons below them."""
         W = self.screen.get_width()
-        btn_h = 46
-        y = self.screen.get_height() - btn_h - 14
-
-        # Left group — wider buttons with generous gap
-        specs = [("New", 106), ("Undo", 114), ("Hint", 100),
-                 ("IDS", 88), ("BFS", 88), ("UCS", 88), ("A*", 76)]
+        btn_h = 36
         gap = 12
-        x = 14
+
+        # Main buttons group
+        main_specs = [("NEW GAME", 150), ("UNDO", 110), ("HINT", 110), ("MENU", 100)]
+        total_main_w = sum(w for _, w in main_specs) + gap * (len(main_specs) - 1)
+        start_x = W - total_main_w - 24
+        y_main = 24
+
         out: list[tuple[str, pygame.Rect]] = []
-        for label, w in specs:
-            out.append((label, pygame.Rect(x, y, w, btn_h)))
+        x = start_x
+        for label, w in main_specs:
+            out.append((label, pygame.Rect(x, y_main, w, btn_h)))
             x += w + gap
 
-        # Right: More
-        more_w = 106
-        out.append(("More", pygame.Rect(W - more_w - 14, y, more_w, btn_h)))
+        # Algo buttons aligned exactly under main buttons
+        algo_specs = [("IDS", 117), ("BFS", 118), ("UCS", 118), ("A*", 117)]
+        y_algo = y_main + btn_h + 12
+
+        x = start_x
+        for label, w in algo_specs:
+            out.append((label, pygame.Rect(x, y_algo, w, btn_h)))
+            x += w + gap
+
         return out
 
     def handle_button_click(self, pos: tuple[int, int]) -> bool:
         for label, rect in self.action_buttons():
             if not rect.collidepoint(pos):
                 continue
-            # Visual press effect — show highlight for 0.12s
             self.pressed_button_label = label
             self.pressed_button_until = time() + 0.12
-            if label == "New":
+            if label == "NEW GAME":
                 self.new_game()
-            elif label == "Undo":
+            elif label == "UNDO":
                 self.undo()
             elif label in ("IDS", "BFS", "UCS", "A*"):
                 if self._solver_thread and self._solver_thread.is_alive():
@@ -216,6 +225,7 @@ class FreeCellGame:
         old_state = deepcopy(self.state)
         self.redo_stack.append(deepcopy(self.state))
         self.state = self.undo_stack.pop()
+        self.moves += 1
         self.add_score(-5)   # penalty for undo
         self.start_state_transition_animation(old_state, self.state)
         self.drag = None
@@ -230,6 +240,7 @@ class FreeCellGame:
         old_state = deepcopy(self.state)
         self.undo_stack.append(deepcopy(self.state))
         self.state = self.redo_stack.pop()
+        self.moves += 1
         self.start_state_transition_animation(old_state, self.state)
         self.drag = None
         self.drop_anim = None
@@ -446,6 +457,7 @@ class FreeCellGame:
                 sx, sy = self.card_source_position(src, start_index)
                 res, moved_cards = apply_move(self.state, src, dst, start_index)
                 if res.ok:
+                    self.moves += 1
                     self.add_score(5 * len(moved_cards))  # +5 per card (double-click)
                     self.start_drop_animation(moved_cards, dst, sx, sy)
                     return True
@@ -459,6 +471,7 @@ class FreeCellGame:
                     sx, sy = self.card_source_position(src, start_index)
                     res, moved_cards = apply_move(self.state, src, dst, start_index)
                     if res.ok:
+                        self.moves += 1
                         self.start_drop_animation(moved_cards, dst, sx, sy)
                         return True
 
@@ -471,6 +484,7 @@ class FreeCellGame:
                 sx, sy = self.card_source_position(src, start_index)
                 res, moved_cards = apply_move(self.state, src, dst, start_index)
                 if res.ok:
+                    self.moves += 1
                     self.start_drop_animation(moved_cards, dst, sx, sy)
                     return True
             return False
@@ -484,6 +498,7 @@ class FreeCellGame:
                 sx, sy = self.card_source_position(src, start_index)
                 res, moved_cards = apply_move(self.state, src, dst, start_index)
                 if res.ok:
+                    self.moves += 1
                     self.start_drop_animation(moved_cards, dst, sx, sy)
                     return True
         return False
@@ -505,6 +520,8 @@ class FreeCellGame:
                 self.undo_stack.pop()
             self.set_status(result.reason)
             return
+
+        self.moves += 1
 
         # Scoring: +10 per card moved to foundation
         if dst.kind == PileType.FOUNDATION:
@@ -580,7 +597,7 @@ class FreeCellGame:
 
     def draw(self) -> None:
         self.renderer.draw_background()
-        self.renderer.draw_header(self.score, self.elapsed)
+        self.renderer.draw_header(self.score, self.elapsed, self.moves)
         self.renderer.draw_static_board(self.layout, self.state, highlight_targets=self.collect_highlight_targets())
 
         hidden_tableau = None

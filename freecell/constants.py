@@ -16,18 +16,19 @@ TABLEAU_GAP_Y = 34
 
 # Global spacing and board layout
 OUTER_PADDING = 24
-HEADER_HEIGHT = 56                          # Height of title / score / time bar
-TOP_ROW_Y = HEADER_HEIGHT + 20             # Card slots start below header (= 76)
+HEADER_HEIGHT = 120                         # Height of title / score / time bar
+TOP_ROW_Y = HEADER_HEIGHT + 24             # Card slots start below header
 TABLEAU_Y = TOP_ROW_Y + CARD_HEIGHT + 20   # Tableau below top slots (= 246)
 SLOT_GAP_X = 24
 
 # Color palette
-COLOR_BG = (17, 73, 48)
-COLOR_FELT_NOISE = (15, 67, 44)
-COLOR_PANEL = (10, 50, 34)
-COLOR_HEADER = (10, 45, 28)                # Darker strip for the title bar
-COLOR_SLOT = (27, 95, 63)
-COLOR_SLOT_BORDER = (72, 161, 116)
+COLOR_BG = (70, 85, 100)
+COLOR_FELT_NOISE = (65, 80, 95)
+COLOR_PANEL = (50, 65, 80)
+COLOR_HEADER = (45, 55, 65)
+COLOR_FREECELL_BORDER = (110, 220, 240)
+COLOR_FOUNDATION_BORDER = (50, 60, 70)
+COLOR_FOUNDATION_ICON = (80, 90, 100)
 COLOR_CARD_FACE = (245, 244, 238)
 COLOR_CARD_BORDER = (60, 60, 60)
 COLOR_CARD_RED = (183, 32, 32)
