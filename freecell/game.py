@@ -6,7 +6,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from time import time
 import threading
-import threading
 
 import pygame
 
@@ -14,10 +13,11 @@ from .animation import Tween
 from .constants import (
     DOUBLE_CLICK_SECONDS,
     DRAG_SMOOTH_FACTOR,
-    FPS,
     DROP_ANIM_DURATION,
+    FPS,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SOLVER_AUTOSOLVE_TIMEOUT_S,
     TITLE,
 )
 from .layout import BoardLayout
@@ -60,6 +60,8 @@ class CardAnimation:
 
 
 class FreeCellGame:
+    DEFAULT_TESTCASE_NUM = 4
+
     def _compute_window_size(self) -> tuple[int, int]:
         """Pick a windowed size that always fits desktop bounds."""
         desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
@@ -78,7 +80,7 @@ class FreeCellGame:
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = generate_state_testcase(1)
+        self.state: GameState = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -91,6 +93,10 @@ class FreeCellGame:
         self._solver_thread: threading.Thread | None = None
         self._solver_result: dict | None = None
         self._solver_label: str = ""
+        self._solver_started_at: float = 0.0
+        self._solver_timed_out: bool = False
+        self.solver_game_over: bool = False
+        self._solver_cancel_event = threading.Event()
         self.transition_anims: list[CardAnimation] = []
         self.auto_foundation_active = False
         self.solution_moves: list = []
@@ -107,7 +113,8 @@ class FreeCellGame:
         self.status_until = time() + seconds
 
     def new_game(self) -> None:
-        self.state = generate_state_testcase(1)
+        self._solver_cancel_event.set()
+        self.state = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None
@@ -117,6 +124,9 @@ class FreeCellGame:
         self.solver_stats = None
         self._solver_thread = None
         self._solver_result = None
+        self._solver_started_at = 0.0
+        self._solver_timed_out = False
+        self.solver_game_over = False
         self.auto_foundation_active = False
         self.transition_anims.clear()
         self.solution_moves = []
@@ -180,7 +190,7 @@ class FreeCellGame:
         return False
 
     def _run_solver_task(self, label: str, state_copy: GameState) -> None:
-        solver = FreeCellSolver(state_copy)
+        solver = FreeCellSolver(state_copy, self._solver_cancel_event)
         stats = None
         try:
             if label == "BFS":
@@ -203,7 +213,11 @@ class FreeCellGame:
         self.set_status(f"Dang giai bang {label}... Vui long doi...", 100.0)
         self._solver_result = None
         self._solver_label = label
-        
+        self._solver_started_at = time()
+        self._solver_timed_out = False
+        self.solver_game_over = False
+        self._solver_cancel_event.clear()
+
         # Deepcopy state passing to background thread to avoid conflict with main thread
         state_copy = deepcopy(self.state)
         self._solver_thread = threading.Thread(
@@ -213,11 +227,27 @@ class FreeCellGame:
         )
         self._solver_thread.start()
 
+    def _apply_solver_timeout(self) -> None:
+        """Auto-solve exceeded SOLVER_AUTOSOLVE_TIMEOUT_S; end the run as game over."""
+        self._solver_cancel_event.set()
+        self._solver_timed_out = True
+        self.solver_game_over = True
+        self.solution_moves.clear()
+        self.solver_stats = None
+        self.auto_foundation_active = False
+        self.set_status(
+            f"Het thoi gian giai ({SOLVER_AUTOSOLVE_TIMEOUT_S // 60} phut). Game over!",
+            12.0,
+        )
+
     def push_undo_snapshot(self) -> None:
         self.undo_stack.append(deepcopy(self.state))
         self.redo_stack.clear()
 
     def undo(self) -> None:
+        if self.solver_game_over:
+            self.set_status("Game over — nhan R hoac New de choi lai.", 2.0)
+            return
         if not self.undo_stack:
             self.set_status("Khong con nuoc de undo.")
             return
@@ -233,6 +263,9 @@ class FreeCellGame:
         self.auto_foundation_active = False
 
     def redo(self) -> None:
+        if self.solver_game_over:
+            self.set_status("Game over — nhan R hoac New de choi lai.", 2.0)
+            return
         if not self.redo_stack:
             self.set_status("Khong co nuoc de redo.")
             return
@@ -305,7 +338,17 @@ class FreeCellGame:
         return None
 
     def try_pick_from_pos(self, pos: tuple[int, int]) -> None:
-        if self.drop_anim or (self._solver_thread and self._solver_thread.is_alive()) or self.solution_moves or self.transition_anims:
+        if (
+            self.drop_anim
+            or (
+                self._solver_thread
+                and self._solver_thread.is_alive()
+                and not self._solver_timed_out
+            )
+            or self.solution_moves
+            or self.transition_anims
+            or self.solver_game_over
+        ):
             return
         # Free cells first
         for i, rect in enumerate(self.layout.free_cells):
@@ -547,22 +590,39 @@ class FreeCellGame:
 
     def update(self, dt: float) -> None:
         # Advance game timer
-        if not self.state.won:
+        if not self.state.won and not self.solver_game_over:
             self.elapsed += dt
 
-        # Check if background solver finished
+        # Background solver finished
         if self._solver_thread and not self._solver_thread.is_alive():
-            if self._solver_result is not None:
+            if not self._solver_timed_out and self._solver_result is not None:
                 stats = self._solver_result
-                if stats and stats.get("path") is not None:
+                if stats.get("cancelled"):
+                    pass
+                elif stats and stats.get("path") is not None:
                     self.solver_stats = stats
                     self.solution_moves = stats["path"].copy()
-                    self.set_status(f"Giai xong voi {self._solver_label}! Dang choi thu...", 3.0)
+                    self.set_status(
+                        f"Giai xong voi {self._solver_label}! Dang choi thu...", 3.0
+                    )
                 else:
-                    self.set_status(f"{self._solver_label} khong the tim ra duong giai.", 3.0)
+                    self.set_status(
+                        f"{self._solver_label} khong the tim ra duong giai.", 3.0
+                    )
                     self.solver_stats = None
                 self._solver_result = None
+            else:
+                self._solver_result = None
             self._solver_thread = None
+
+        # Still solving — wall-clock timeout (5 min)
+        elif (
+            self._solver_thread
+            and self._solver_thread.is_alive()
+            and not self._solver_timed_out
+            and time() - self._solver_started_at >= SOLVER_AUTOSOLVE_TIMEOUT_S
+        ):
+            self._apply_solver_timeout()
 
         if self.solution_moves and not self.drop_anim and not self.transition_anims:
             move = self.solution_moves.pop(0)
@@ -649,7 +709,9 @@ class FreeCellGame:
             for anim in self.transition_anims:
                 self.renderer.draw_card(anim.card, anim.x, anim.y, shadow=True)
 
-        if self.state.won:
+        if self.solver_game_over:
+            self.renderer.draw_solver_timeout_game_over_overlay()
+        elif self.state.won:
             self.renderer.draw_win_overlay()
             if self.solver_stats:
                 font = pygame.font.SysFont("segoeui", 28, bold=True)
@@ -704,7 +766,7 @@ class FreeCellGame:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.handle_button_click(event.pos):
                         continue
-                    if self.state.won:
+                    if self.state.won or self.solver_game_over:
                         continue
                     # pygame 2 provides event.clicks; fallback to timestamp check.
                     is_double = bool(getattr(event, "clicks", 0) >= 2)
@@ -722,7 +784,7 @@ class FreeCellGame:
 
                     self.mouse_down_pos = event.pos
                     self.try_pick_from_pos(event.pos)
-                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and not self.state.won:
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and not self.state.won and not self.solver_game_over:
                     # Click without drag: try auto-move top card to foundation.
                     if self.mouse_down_pos and self.drag:
                         dx = abs(event.pos[0] - self.mouse_down_pos[0])
