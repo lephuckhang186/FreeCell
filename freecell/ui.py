@@ -20,12 +20,15 @@ from .constants import (
     COLOR_HINT,
     COLOR_PANEL,
     COLOR_SHADOW,
-    COLOR_SLOT,
-    COLOR_SLOT_BORDER,
+    COLOR_FREECELL_BORDER,
+    COLOR_FOUNDATION_BORDER,
+    COLOR_FOUNDATION_ICON,
     COLOR_TEXT,
+    COLOR_GAME_OVER,
     COLOR_WIN,
     HEADER_HEIGHT,
     SHADOW_ALPHA,
+    SOLVER_AUTOSOLVE_TIMEOUT_S,
 )
 from .layout import BoardLayout
 from .models import Card, SUIT_SYMBOLS, Suit, is_red
@@ -41,13 +44,23 @@ class Renderer:
         self.font_button = pygame.font.SysFont("segoeui", 22, bold=True)
         self.font_win = pygame.font.SysFont("segoeui", 52, bold=True)
         self.button_icons = self._load_button_icons()
+        self.card_images = self._load_card_images()
+        self.bg_image_orig = self._load_bg_image()
+        self.bg_image_scaled = None
+        self.last_screen_size = (0, 0)
+
+    def _load_bg_image(self) -> pygame.Surface | None:
+        full_path = Path(__file__).resolve().parent.parent / "asset" / "background.jpg"
+        if full_path.exists():
+            return pygame.image.load(str(full_path)).convert()
+        return None
 
     def _load_button_icons(self) -> dict[str, pygame.Surface]:
         asset_dir = Path(__file__).resolve().parent.parent / "asset"
         icon_files = {
-            "New": "new.png",
-            "Undo": "undo.png",
-            "Hint": "hint.png",
+            "NEW GAME": "new.png",
+            "UNDO": "undo.png",
+            "HINT": "hint.png",
         }
         icons: dict[str, pygame.Surface] = {}
         for key, filename in icon_files.items():
@@ -56,44 +69,53 @@ class Renderer:
                 icons[key] = pygame.image.load(str(full_path)).convert_alpha()
         return icons
 
-    def draw_background(self) -> None:
-        self.screen.fill(COLOR_BG)
-        # Subtle felt noise for depth.
-        for y in range(0, self.screen.get_height(), 16):
-            color = COLOR_FELT_NOISE if (y // 16) % 2 == 0 else COLOR_BG
-            pygame.draw.line(self.screen, color, (0, y), (self.screen.get_width(), y), 1)
+    def _load_card_images(self) -> dict[Card, pygame.Surface]:
+        asset_dir = Path(__file__).resolve().parent.parent / "asset" / "card"
+        suit_names = {Suit.CLUBS: "clubs", Suit.DIAMONDS: "diamonds", Suit.HEARTS: "hearts", Suit.SPADES: "spades"}
+        images: dict[Card, pygame.Surface] = {}
+        for suit in Suit:
+            for rank in range(1, 14):
+                card = Card(suit=suit, rank=rank)
+                filename = f"{rank}_of_{suit_names[suit]}.png"
+                full_path = asset_dir / filename
+                if full_path.exists():
+                    img = pygame.image.load(str(full_path)).convert_alpha()
+                    images[card] = pygame.transform.smoothscale(img, (CARD_WIDTH, CARD_HEIGHT))
+        return images
 
-    def draw_header(self, score: int, elapsed: float) -> None:
+    def draw_background(self) -> None:
+        if self.bg_image_orig:
+            curr_size = self.screen.get_size()
+            if self.last_screen_size != curr_size:
+                self.bg_image_scaled = pygame.transform.smoothscale(self.bg_image_orig, curr_size)
+                self.last_screen_size = curr_size
+            self.screen.blit(self.bg_image_scaled, (0, 0))
+        else:
+            self.screen.fill(COLOR_BG)
+
+    def draw_header(self, score: int, elapsed: float, moves: int) -> None:
         """Draw the top title bar: title on left, Score + Time on right."""
         W = self.screen.get_width()
-        pygame.draw.rect(self.screen, COLOR_HEADER, (0, 0, W, HEADER_HEIGHT))
+        
+        # Translucent overlay for header readability over image background
+        header_overlay = pygame.Surface((W, HEADER_HEIGHT), pygame.SRCALPHA)
+        pygame.draw.rect(header_overlay, (0, 0, 0, 90), header_overlay.get_rect())
+        self.screen.blit(header_overlay, (0, 0))
 
         cy = HEADER_HEIGHT // 2
 
-        # Title (left)
-        title_surf = self.font_title.render("FreeCell", True, COLOR_TEXT)
-        self.screen.blit(title_surf, (14, cy - title_surf.get_height() // 2))
-
-        # Time (right edge)
         mins = int(elapsed) // 60
         secs = int(elapsed) % 60
-        time_surf = self.font_title.render(f"Time: {mins:02d}:{secs:02d}", True, COLOR_TEXT)
-        time_x = W - time_surf.get_width() - 14
-        self.screen.blit(time_surf, (time_x, cy - time_surf.get_height() // 2))
+        info_txt = f"Score: {score}    Moves: {moves}    Time: {mins:02d}:{secs:02d}"
+        info_surf = self.font_button.render(info_txt, True, (200, 220, 210))
+        self.screen.blit(info_surf, (24, cy - info_surf.get_height() // 2))
 
-        # Score (left of time)
-        score_surf = self.font_title.render(f"Score: {score}", True, COLOR_TEXT)
-        score_x = time_x - score_surf.get_width() - 44
-        self.screen.blit(score_surf, (score_x, cy - score_surf.get_height() // 2))
+        title_surf = self.font_title.render("FREECELL", True, COLOR_TEXT)
+        title_rect = title_surf.get_rect(center=(W // 2, cy - 10))
+        self.screen.blit(title_surf, title_rect)
 
     def draw_slot(self, rect: pygame.Rect, label: str = "", highlighted: bool = False) -> None:
-        pygame.draw.rect(self.screen, COLOR_SLOT, rect, border_radius=CARD_CORNER_RADIUS)
-        border_color = COLOR_HINT if highlighted else COLOR_SLOT_BORDER
-        border_width = 4 if highlighted else 2
-        pygame.draw.rect(self.screen, border_color, rect, width=border_width, border_radius=CARD_CORNER_RADIUS)
-        if label:
-            txt = self.font_small.render(label, True, COLOR_TEXT)
-            self.screen.blit(txt, txt.get_rect(center=rect.center))
+        pass # Now handled natively inside draw_static_board using specific logic per cell type
 
     def draw_card(self, card: Card, x: float, y: float, shadow: bool = True) -> None:
         card_rect = pygame.Rect(round(x), round(y), CARD_WIDTH, CARD_HEIGHT)
@@ -102,15 +124,18 @@ class Renderer:
             pygame.draw.rect(sh, (*COLOR_SHADOW, SHADOW_ALPHA), sh.get_rect(), border_radius=CARD_CORNER_RADIUS + 2)
             self.screen.blit(sh, (card_rect.x + 3, card_rect.y + 4))
 
-        pygame.draw.rect(self.screen, COLOR_CARD_FACE, card_rect, border_radius=CARD_CORNER_RADIUS)
-        pygame.draw.rect(self.screen, COLOR_CARD_BORDER, card_rect, width=2, border_radius=CARD_CORNER_RADIUS)
+        if card in self.card_images:
+            self.screen.blit(self.card_images[card], card_rect)
+        else:
+            pygame.draw.rect(self.screen, COLOR_CARD_FACE, card_rect, border_radius=CARD_CORNER_RADIUS)
+            pygame.draw.rect(self.screen, COLOR_CARD_BORDER, card_rect, width=2, border_radius=CARD_CORNER_RADIUS)
 
-        color = COLOR_CARD_RED if is_red(card.suit) else COLOR_CARD_BLACK
-        label = self.font_card.render(card.label, True, color)
-        self.screen.blit(label, (card_rect.x + 10, card_rect.y + 8))
+            color = COLOR_CARD_RED if is_red(card.suit) else COLOR_CARD_BLACK
+            label = self.font_card.render(card.label, True, color)
+            self.screen.blit(label, (card_rect.x + 10, card_rect.y + 8))
 
-        suit = self.font_title.render(card.label[-1], True, color)
-        self.screen.blit(suit, (card_rect.right - 35, card_rect.bottom - 42))
+            suit = self.font_title.render(card.label[-1], True, color)
+            self.screen.blit(suit, (card_rect.right - 35, card_rect.bottom - 42))
 
     def draw_static_board(
         self,
@@ -119,45 +144,70 @@ class Renderer:
         highlight_targets: set[tuple[str, int]] | None = None,
     ) -> None:
         highlight_targets = highlight_targets or set()
-        panel = pygame.Rect(12, 12, self.screen.get_width() - 24, self.screen.get_height() - 24)
-        pygame.draw.rect(self.screen, COLOR_PANEL, panel, width=2, border_radius=16)
 
-        # Free cell slots — no label (matches reference image)
         for i, rect in enumerate(layout.free_cells):
-            self.draw_slot(rect, highlighted=("freecell", i) in highlight_targets)
+            highlighted = ("freecell", i) in highlight_targets
+            
+            overlay = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            pygame.draw.rect(overlay, (0, 0, 0, 90), overlay.get_rect(), border_radius=CARD_CORNER_RADIUS)
+            
+            border_c = (255, 230, 100, 255) if highlighted else (255, 255, 255, 100)
+            border_w = 4 if highlighted else 2
+            pygame.draw.rect(overlay, border_c, overlay.get_rect(), width=border_w, border_radius=CARD_CORNER_RADIUS)
+            
+            self.screen.blit(overlay, rect.topleft)
 
-        # Foundation slots — show suit symbol
         for i, rect in enumerate(layout.foundations):
-            suit = list(Suit)[i]
-            self.draw_slot(rect, highlighted=("foundation", i) in highlight_targets)
-            suit_color = COLOR_CARD_RED if is_red(suit) else COLOR_TEXT
-            suit_txt = self.font_title.render(SUIT_SYMBOLS[suit], True, suit_color)
-            self.screen.blit(suit_txt, suit_txt.get_rect(center=rect.center))
+            highlighted = ("foundation", i) in highlight_targets
+            
+            overlay = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            pygame.draw.rect(overlay, (0, 0, 0, 130), overlay.get_rect(), border_radius=CARD_CORNER_RADIUS)
+            
+            border_c = (255, 230, 100, 255) if highlighted else (255, 255, 255, 80)
+            border_w = 4 if highlighted else 2
+            pygame.draw.rect(overlay, border_c, overlay.get_rect(), width=border_w, border_radius=CARD_CORNER_RADIUS)
+            
+            self.screen.blit(overlay, rect.topleft)
 
-        for i, rect in enumerate(layout.tableau):
-            self.draw_slot(rect, highlighted=("tableau", i) in highlight_targets)
+            suit = list(Suit)[i]
+            if not state.foundations[suit]:
+                suit_txt = self.font_title.render(SUIT_SYMBOLS[suit], True, (255, 255, 255, 80))
+                # Add alpha blending to text manually since pygame text doesn't inherit alpha rect cleanly easily
+                suit_txt.set_alpha(100)
+                self.screen.blit(suit_txt, suit_txt.get_rect(center=rect.center))
+
+        # Tableau spots intentionally not drawn to match clean background
 
     def draw_action_buttons(
         self,
         buttons: list[tuple[str, pygame.Rect]],
         pressed: str = "",
     ) -> None:
+        mouse_pos = pygame.mouse.get_pos()
         for label, rect in buttons:
             is_pressed = label == pressed
+            is_hover = rect.collidepoint(mouse_pos)
 
-            # Slight Y lift when pressed (button "rises" toward user)
-            draw_rect = rect.move(0, -3 if is_pressed else 0)
+            # Slight Y lift when hovered or pressed
+            dy = 0
+            if is_pressed:
+                dy = 1   # Sink in when pressed
+            elif is_hover:
+                dy = -2  # Lift slightly when hovered
+            draw_rect = rect.move(0, dy)
 
-            # Background — brighter when pressed
+            # Background — brighter when hovered or pressed
             overlay = pygame.Surface((draw_rect.width, draw_rect.height), pygame.SRCALPHA)
             if is_pressed:
-                pygame.draw.rect(overlay, (80, 80, 80, 210), overlay.get_rect(), border_radius=10)
+                pygame.draw.rect(overlay, (100, 100, 100, 220), overlay.get_rect(), border_radius=10)
+            elif is_hover:
+                pygame.draw.rect(overlay, (80, 80, 80, 200), overlay.get_rect(), border_radius=10)
             else:
-                pygame.draw.rect(overlay, (0, 0, 0, 170), overlay.get_rect(), border_radius=10)
+                pygame.draw.rect(overlay, (20, 25, 30, 170), overlay.get_rect(), border_radius=10)
             self.screen.blit(overlay, draw_rect.topleft)
 
-            # Border — glowing white when pressed
-            border_color = (200, 200, 200) if is_pressed else (70, 70, 70)
+            # Border — glowing white when pressed/hovered
+            border_color = (255, 255, 255) if is_pressed else ((200, 200, 200) if is_hover else (70, 70, 70))
             pygame.draw.rect(self.screen, border_color, draw_rect, width=2, border_radius=10)
 
             # Optional icon (New / Undo / Hint)
@@ -236,3 +286,20 @@ class Renderer:
         sub = self.font_title.render("Press R for a new deal", True, COLOR_TEXT)
         self.screen.blit(txt, txt.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 24)))
         self.screen.blit(sub, sub.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 24)))
+
+    def draw_solver_timeout_game_over_overlay(self) -> None:
+        """Shown when auto-solve exceeds SOLVER_AUTOSOLVE_TIMEOUT_S."""
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 140))
+        self.screen.blit(overlay, (0, 0))
+        title = self.font_win.render("GAME OVER", True, COLOR_GAME_OVER)
+        sub = self.font_title.render(
+            f"Auto-solve qua {SOLVER_AUTOSOLVE_TIMEOUT_S // 60} phut",
+            True,
+            COLOR_TEXT,
+        )
+        hint = self.font_small.render("Nhan R hoac New de choi lai", True, COLOR_TEXT)
+        cx, cy = self.screen.get_width() // 2, self.screen.get_height() // 2
+        self.screen.blit(title, title.get_rect(center=(cx, cy - 40)))
+        self.screen.blit(sub, sub.get_rect(center=(cx, cy + 8)))
+        self.screen.blit(hint, hint.get_rect(center=(cx, cy + 52)))
