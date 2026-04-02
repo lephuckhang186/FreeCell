@@ -95,7 +95,7 @@ class FreeCellGame:
         self.auto_foundation_active = False
         self.solution_moves: list = []
         # UI state
-        self.game_id: int = 3953522
+        self.game_id: int = 2  # endgame demo (BFS ~4 moves)
         self.score: int = 0
         self.elapsed: float = 0.0
         self.pressed_button_label: str = ""
