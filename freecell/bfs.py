@@ -13,10 +13,10 @@ from .skill import FreeCellSolverBase, REPORT_INTERVAL_BFS_IDS
 class BfsSolverMixin:
     def bfs_solving(self) -> dict:
         """
-        BFS tối ưu với 3 kỹ thuật:
-        1. Parent Tracking
-        2. Auto-Foundation
-        3. Dead-Move Pruning (trong get_all_possible_move)
+        Optimal BFS implementation involving:
+        1. Parent tracking for path reconstruction.
+        2. Automatic foundation moves as a pruning strategy.
+        3. Dead-move pruning implemented within the move generator.
         """
         assert isinstance(self, FreeCellSolverBase)
         start_time = time.time()

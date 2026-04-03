@@ -1,8 +1,7 @@
-"""Kỹ thuật / cơ sở dùng chung cho BFS, IDS, UCS, A*."""
+"""Shared utilities and logic for FreeCell search algorithms (BFS, IDS, UCS, A*)."""
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 
@@ -17,17 +16,18 @@ from .rules import (
 )
 from .state import GameState
 
-# Bật DEBUG_STATS=True để in thống kê định kỳ; mỗi nhóm solver dùng REPORT_INTERVAL riêng.
+# Set DEBUG_STATS to True for periodic console performance reports.
+# Different reporting intervals are used depending on the algorithm's typical expansion rate.
 DEBUG_STATS = True
-REPORT_INTERVAL_BFS_IDS = 1000  # BFS, IDS (DFS iterative deepening)
-REPORT_INTERVAL_UCS_ASTAR = 100  # UCS, A*
+REPORT_INTERVAL_BFS_IDS = 1000   # BFS/IDS expansion pace.
+REPORT_INTERVAL_UCS_ASTAR = 100  # UCS/A* cost-sorting pace.
 
-# Sentinel: IDS dls() trả về khi bị hủy (UI timeout / cancel event)
+# Sentinel object used by IDS dls() to signal recursion interruption via UI/Cancel events.
 SOLVER_IDS_CANCELLED = object()
 
 
 class MoveCostConfig:
-    """Cấu hình cho move_cost function."""
+    """Configuration for move cost weighting."""
 
     def __init__(self, algorithm: str = "ucs"):
         self.algorithm = algorithm  # 'ucs' hoặc 'astar'

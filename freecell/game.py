@@ -1,4 +1,7 @@
-"""Main pygame loop and player interaction."""
+"""
+FreeCell Application Entry Point.
+This module defines the main game loop, event handling, and UI orchestration.
+"""
 
 from __future__ import annotations
 
@@ -973,9 +976,9 @@ class FreeCellGame:
                 # Sub-submenu: level numbers
                 if self.submenu_hover and self.submenu_hover in NEW_GAME_LEVEL_RANGES:
                     lo, hi = NEW_GAME_LEVEL_RANGES[self.submenu_hover]
-                    levels = [str(l) for l in range(lo, hi + 1)]
+                    levels = [str(lvl) for lvl in range(lo, hi + 1)]
                     s2_outer, s2_rects = sub2_layout(sub_rects[self.submenu_hover], levels, screen_h=sh)
-                    s2_items = [(l, l) for l in levels]
+                    s2_items = [(lvl, lvl) for lvl in levels]
                     self.renderer.draw_submenu(s2_outer, s2_items, s2_rects, self.sub2_hover)
 
             # Submenu for SOLVE → algorithms

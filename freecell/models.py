@@ -1,4 +1,7 @@
-"""Data models and utility helpers for cards and piles."""
+"""
+FreeCell Core Models.
+Defines base data structures for Suits, Ranks, and Cards.
+"""
 
 from __future__ import annotations
 

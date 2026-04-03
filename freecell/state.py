@@ -1,4 +1,7 @@
-"""Mutable game state and setup helpers."""
+"""
+Game State Management.
+Defines the mutable state of the board and provides factory methods for initialization.
+"""
 
 from __future__ import annotations
 

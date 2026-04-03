@@ -1,4 +1,7 @@
-"""Centralized constants used by the whole game."""
+"""
+Global Game Constants.
+Defines layout dimensions, color palettes, and default configurations.
+"""
 
 from __future__ import annotations
 

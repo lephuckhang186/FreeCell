@@ -6,10 +6,10 @@ import re
 # CONFIG
 # =========================
 LEVEL_CONFIG = {
-    # Make Easy/Medium/Hard tiers harder by:
-    # - increasing MOVES (more shuffles)
-    # - increasing NOISE (more rule-breaking)
-    # - slightly lowering MIN_SEQ (allow more "messy" cascades)
+    # Difficulty tuning for Easy/Medium/Hard tiers:
+    # - MOVES: Shuffle count.
+    # - NOISE: Probability of introducing non-rule-abiding card movements.
+    # - MIN_SEQ: Target tableau sequence quality ratio.
     1: (140, 2, 0.65, 0.03),
     2: (340, 3, 0.55, 0.08),
     3: (700, 4, 0.45, 0.14),
@@ -59,10 +59,10 @@ def card_str(x):
 # INIT
 # =========================
 def init_tableau():
-    # Bắt đầu từ trạng thái Hoàn hảo (Perfect Cascades)
+    # Begin with a solvable "perfect" state to ensure validity after shuffling.
     sequences = []
-    # Easy (1-3): dùng xen kẽ màu hoàn hảo (black-red-black-red)
-    # Medium/Hard (4-10): dùng cycle có 2 suit cùng màu liền kề
+    # Low levels (1-3) favor alternating suits for clarity.
+    # Higher levels introduce more variety in the initial cascade.
     if LEVEL <= 3:
         suits_cycle = [3, 2, 0, 1]  # S(b), H(r), C(b), D(r)
     else:
@@ -89,7 +89,7 @@ def seq_score(tableau):
     for col in tableau:
         for i in range(len(col) - 1):
             total += 1
-            # col[i+1] đặt lên col[i]
+            # Score based on how many cards follow the descending alternating rule.
             if can_put(col[i + 1], col[i]):
                 good += 1
     return good / total if total > 0 else 0
@@ -155,7 +155,8 @@ def generate():
             a = tableau[c1][-1]
             b = tableau[c2][-1] if tableau[c2] else None
 
-            # NOISE = Tỉ lệ phá hỏng logic để trộn đều bài (tạo thành ván bài random giống thật)
+            # Use noise threshold to allow occasional illegal shuffles.
+            # This ensures the resulting board feels varied and mimics natural distribution.
             if random.random() < NOISE:
                 tableau[c1].pop()
                 tableau[c2].append(a)

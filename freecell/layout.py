@@ -1,4 +1,7 @@
-"""Board geometry and hit-testing."""
+"""
+Layout and Geometry Engine.
+Responsible for calculating screen positions and hit-target detection.
+"""
 
 from __future__ import annotations
 

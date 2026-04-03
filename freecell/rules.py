@@ -1,4 +1,7 @@
-"""Pure move validation and move application logic."""
+"""
+FreeCell Rule Engine.
+Implements validation logic and state transition rules.
+"""
 
 from __future__ import annotations
 
