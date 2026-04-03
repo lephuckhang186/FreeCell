@@ -21,15 +21,11 @@ from .constants import (
     COLOR_FELT_BEVEL_HIGHLIGHT,
     COLOR_FELT_BEVEL_SHADOW,
     COLOR_FELT_SLOT_FACE,
-    FAB_PANEL_FILL,
-    FAB_PANEL_LINE,
-    FAB_SHADOW_ALPHA,
     COLOR_GAME_OVER,
     COLOR_HINT_GLOW,
     FOOTER_BG,
     FOOTER_BEVEL_DK,
     FOOTER_BEVEL_LT,
-    FOOTER_GRIP_WIDTH,
     FOOTER_INNER_MARGIN,
     FOOTER_PANEL_FACE,
     FOOTER_PANEL_GAP,
@@ -45,18 +41,6 @@ from .constants import (
     COLOR_WIN,
     FOOTER_HEIGHT,
     FOOTER_INFO_FONT_SIZE,
-    FAB_AI_DROPDOWN_GAP,
-    FAB_AI_DROPDOWN_OFFSET_X,
-    FAB_AI_DROPDOWN_OFFSET_Y,
-    FAB_AI_DROPDOWN_ROW_H,
-    FAB_AI_DROPDOWN_WIDTH,
-    FAB_AI_ALGO_ORDER,
-    FAB_CELL,
-    FAB_GAP,
-    FAB_MAIN_ORDER,
-    FAB_PAD,
-    FAB_RADIUS,
-    FAB_TOOLTIPS,
     SHADOW_ALPHA,
     SHADOW_ALPHA_SOFT,
     CARD_SHADOW_OFFSET,
@@ -66,15 +50,40 @@ from .constants import (
     CARD_BEVEL_LO_ALPHA,
     SOLVER_AUTOSOLVE_TIMEOUT_S,
     SOLVER_BTN_ACCENTS,
-    TOOLBAR_BUTTON_GLYPHS,
     NEW_GAME_LEVEL_RANGES,
+    # Menu constants
+    MENU_BTN_MARGIN,
+    MENU_DROPUP_WIDTH,
+    MENU_DROPUP_ROW_H,
+    MENU_DROPUP_PAD,
+    MENU_DROPUP_GAP,
+    MENU_DROPUP_RADIUS,
+    MENU_SUBMENU_WIDTH,
+    MENU_SUBMENU_ROW_H,
+    MENU_SUBMENU_PAD,
+    MENU_SUBMENU_GAP,
+    MENU_SUBMENU_RADIUS,
+    MENU_SUB2_CELL_W,
+    MENU_SUB2_ROW_H,
+    MENU_ITEMS,
+    MENU_ITEMS_WITH_SUBMENU,
+    MENU_GLYPHS,
+    SOLVE_ALGO_ORDER,
+    MENU_BG,
+    MENU_BORDER,
+    MENU_TEXT_COLOR,
+    MENU_TEXT_HOVER,
+    MENU_HOVER_FACE,
+    MENU_ARROW,
 )
 from .layout import BoardLayout
 from .models import Card, SUIT_SYMBOLS, Suit, is_red
 from .state import GameState
 
 
-def _lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+def _lerp_color(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
     return (
         int(a[0] + (b[0] - a[0]) * t),
         int(a[1] + (b[1] - a[1]) * t),
@@ -82,76 +91,81 @@ def _lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> t
     )
 
 
-def fab_outer_size() -> tuple[int, int]:
-    n = len(FAB_MAIN_ORDER)
-    ih = n * FAB_CELL + (n - 1) * FAB_GAP
-    return FAB_CELL + 2 * FAB_PAD, ih + 2 * FAB_PAD
+# ── Menu geometry helpers (used by game.py too) ────────────────────────────────
 
 
-def fab_icon_rects(fx: int, fy: int) -> dict[str, pygame.Rect]:
-    rects: dict[str, pygame.Rect] = {}
-    x = fx + FAB_PAD
-    y = fy + FAB_PAD
-    for key in FAB_MAIN_ORDER:
-        rects[key] = pygame.Rect(x, y, FAB_CELL, FAB_CELL)
-        y += FAB_CELL + FAB_GAP
-    return rects
-
-
-def fab_ai_dropdown_layout(ai_cell: pygame.Rect) -> tuple[pygame.Rect, dict[str, pygame.Rect]]:
-    """Vertical list of algorithms directly under the AI cell (horizontal bar = one column)."""
-    algos = FAB_AI_ALGO_ORDER
-    row = FAB_AI_DROPDOWN_ROW_H
-    w = FAB_AI_DROPDOWN_WIDTH
-    pad = 4
-    inner_h = pad * 2 + row * len(algos)
-    left = ai_cell.centerx - w // 2 + FAB_AI_DROPDOWN_OFFSET_X
-    top = ai_cell.bottom + FAB_AI_DROPDOWN_GAP + FAB_AI_DROPDOWN_OFFSET_Y
-    outer = pygame.Rect(left, top, w, inner_h)
-    rects: dict[str, pygame.Rect] = {}
-    y = top + pad
-    for a in algos:
-        rects[a] = pygame.Rect(left + 3, y, w - 6, row)
-        y += row
-    return outer, rects
-
-
-def fab_ai_dropdown_visible(pos: tuple[int, int], fx: int, fy: int) -> bool:
-    rects = fab_icon_rects(fx, fy)
-    ai = rects["AI"]
-    drop_outer, _ = fab_ai_dropdown_layout(ai)
-    left_b = min(ai.left, drop_outer.left)
-    right_b = max(ai.right, drop_outer.right)
-    gap_bridge = pygame.Rect(left_b, ai.bottom, right_b - left_b, FAB_AI_DROPDOWN_GAP)
-    return bool(
-        ai.collidepoint(pos)
-        or drop_outer.collidepoint(pos)
-        or gap_bridge.collidepoint(pos)
+def menu_button_rect(screen_w: int, screen_h: int) -> pygame.Rect:
+    """Rect of the ☰ button sitting inside the footer bar."""
+    btn_size = FOOTER_HEIGHT - 2 * MENU_BTN_MARGIN
+    return pygame.Rect(
+        screen_w - MENU_BTN_MARGIN - btn_size,
+        screen_h - FOOTER_HEIGHT + MENU_BTN_MARGIN,
+        btn_size,
+        btn_size,
     )
 
 
-def fab_hit_at(pos: tuple[int, int], fx: int, fy: int) -> tuple[str, str | None]:
-    rects = fab_icon_rects(fx, fy)
-    ai = rects["AI"]
-    drop_outer, algo_rects = fab_ai_dropdown_layout(ai)
+def dropup_layout(
+    screen_w: int, screen_h: int
+) -> tuple[pygame.Rect, dict[str, pygame.Rect]]:
+    """Outer rect + per-item rects for the main dropup, anchored above ☰."""
+    btn = menu_button_rect(screen_w, screen_h)
+    n = len(MENU_ITEMS)
+    menu_h = n * MENU_DROPUP_ROW_H + 2 * MENU_DROPUP_PAD
+    menu_w = MENU_DROPUP_WIDTH
+    x = btn.right - menu_w
+    y = btn.top - MENU_DROPUP_GAP - menu_h
+    outer = pygame.Rect(x, y, menu_w, menu_h)
+    rects: dict[str, pygame.Rect] = {}
+    iy = y + MENU_DROPUP_PAD
+    for item in MENU_ITEMS:
+        rects[item] = pygame.Rect(x + 3, iy, menu_w - 6, MENU_DROPUP_ROW_H)
+        iy += MENU_DROPUP_ROW_H
+    return outer, rects
 
-    if fab_ai_dropdown_visible(pos, fx, fy):
-        for name in FAB_AI_ALGO_ORDER:
-            if algo_rects[name].collidepoint(pos):
-                return ("algo", name)
 
-    ow, oh = fab_outer_size()
-    outer = pygame.Rect(fx, fy, ow, oh)
-    for key in FAB_MAIN_ORDER:
-        if rects[key].collidepoint(pos):
-            return ("main", key)
-    if drop_outer.collidepoint(pos):
-        return ("panel", None)
-    if fab_ai_dropdown_visible(pos, fx, fy):
-        return ("panel", None)
-    if outer.collidepoint(pos):
-        return ("panel", None)
-    return ("none", None)
+def submenu_layout(
+    parent_rect: pygame.Rect,
+    items: list[str],
+    width: int = MENU_SUBMENU_WIDTH,
+    row_h: int = MENU_SUBMENU_ROW_H,
+    pad: int = MENU_SUBMENU_PAD,
+    screen_h: int = 0,
+) -> tuple[pygame.Rect, dict[str, pygame.Rect]]:
+    """Flyout-left submenu anchored to *parent_rect*, clamped to screen."""
+    n = len(items)
+    sub_h = n * row_h + 2 * pad
+    x = parent_rect.left - MENU_SUBMENU_GAP - width
+    y = parent_rect.top
+    # Clamp so submenu doesn't go below window
+    if screen_h > 0 and y + sub_h > screen_h:
+        y = max(0, screen_h - sub_h)
+    outer = pygame.Rect(x, y, width, sub_h)
+    rects: dict[str, pygame.Rect] = {}
+    iy = y + pad
+    for item in items:
+        rects[item] = pygame.Rect(x + 3, iy, width - 6, row_h)
+        iy += row_h
+    return outer, rects
+
+
+def sub2_layout(
+    parent_rect: pygame.Rect,
+    items: list[str],
+    screen_h: int = 0,
+) -> tuple[pygame.Rect, dict[str, pygame.Rect]]:
+    """Level-number flyout (narrower cells)."""
+    return submenu_layout(
+        parent_rect,
+        items,
+        MENU_SUB2_CELL_W,
+        MENU_SUB2_ROW_H,
+        MENU_SUBMENU_PAD,
+        screen_h,
+    )
+
+
+# ── Renderer ───────────────────────────────────────────────────────────────────
 
 
 class Renderer:
@@ -164,13 +178,15 @@ class Renderer:
         self.font_button = pygame.font.SysFont("segoeui", 22, bold=True)
         self.font_footer_info = pygame.font.SysFont("Tahoma", FOOTER_INFO_FONT_SIZE)
         self.font_win = pygame.font.SysFont("segoeui", 52, bold=True)
-        self.font_button_glyph = pygame.font.SysFont("segoe ui symbol", 23, bold=True)
-        self.font_fab_tip = pygame.font.SysFont("segoeui", 16, bold=True)
-        self.font_fab_dd_hover = pygame.font.SysFont("segoeui", 20, bold=True)
+        self.font_menu_glyph = pygame.font.SysFont("segoe ui symbol", 15)
+        self.font_menu_item = pygame.font.SysFont("Tahoma", 14)
         self.card_images = self._load_card_images()
         self.bg_image_orig = self._load_bg_image()
         self.bg_image_scaled = None
         self.last_screen_size = (0, 0)
+        self.loading_frames = self._load_gif_frames("loading.gif")
+
+    # ── asset loading ──────────────────────────────────────────────────────
 
     def _load_bg_image(self) -> pygame.Surface | None:
         full_path = Path(__file__).resolve().parent.parent / "asset" / "background.jpg"
@@ -178,9 +194,41 @@ class Renderer:
             return pygame.image.load(str(full_path)).convert()
         return None
 
+    def _load_gif_frames(self, filename: str) -> list[pygame.Surface]:
+        full_path = Path(__file__).resolve().parent.parent / "asset" / filename
+        frames = []
+        if full_path.exists():
+            try:
+                from PIL import Image
+
+                img = Image.open(str(full_path))
+                for frame in range(img.n_frames):
+                    img.seek(frame)
+                    frame_rgba = img.convert("RGBA")
+                    raw_str = frame_rgba.tobytes("raw", "RGBA")
+                    surf = pygame.image.frombuffer(raw_str, frame_rgba.size, "RGBA")
+
+                    # scale down to fit footer
+                    orig_w, orig_h = surf.get_size()
+                    target_h = FOOTER_HEIGHT - 4
+                    if orig_h > 0:
+                        target_w = int(orig_w * (target_h / orig_h))
+                        surf = pygame.transform.smoothscale(
+                            surf, (max(1, target_w), max(1, target_h))
+                        )
+                    frames.append(surf)
+            except Exception as e:
+                print(f"Failed to load GIF frames: {e}")
+        return frames
+
     def _load_card_images(self) -> dict[Card, pygame.Surface]:
         asset_dir = Path(__file__).resolve().parent.parent / "asset" / "card"
-        suit_names = {Suit.CLUBS: "clubs", Suit.DIAMONDS: "diamonds", Suit.HEARTS: "hearts", Suit.SPADES: "spades"}
+        suit_names = {
+            Suit.CLUBS: "clubs",
+            Suit.DIAMONDS: "diamonds",
+            Suit.HEARTS: "hearts",
+            Suit.SPADES: "spades",
+        }
         images: dict[Card, pygame.Surface] = {}
         for suit in Suit:
             for rank in range(1, 14):
@@ -193,7 +241,6 @@ class Renderer:
         return images
 
     def _compose_card_face_from_png(self, img: pygame.Surface) -> pygame.Surface:
-        """Scale art slightly smaller and center so rank/suit clear the rounded top-left."""
         pad = CARD_FACE_ART_INSET
         inner_w = max(1, CARD_WIDTH - 2 * pad)
         inner_h = max(1, CARD_HEIGHT - 2 * pad)
@@ -203,20 +250,20 @@ class Renderer:
         canvas.blit(scaled, (pad, pad))
         return self._clip_rounded_surface(canvas, CARD_CORNER_RADIUS)
 
-    def _clip_rounded_surface(self, surf: pygame.Surface, border_radius: int) -> pygame.Surface:
-        """Multiply alpha by a rounded rect so square PNG corners don't show past the card outline."""
+    def _clip_rounded_surface(
+        self, surf: pygame.Surface, border_radius: int
+    ) -> pygame.Surface:
         w, h = surf.get_size()
         rounded = pygame.Surface((w, h), pygame.SRCALPHA)
         rounded.blit(surf, (0, 0))
         mask = pygame.Surface((w, h), pygame.SRCALPHA)
         pygame.draw.rect(
-            mask,
-            (255, 255, 255, 255),
-            mask.get_rect(),
-            border_radius=border_radius,
+            mask, (255, 255, 255, 255), mask.get_rect(), border_radius=border_radius
         )
         rounded.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         return rounded
+
+    # ── background / textures ──────────────────────────────────────────────
 
     def _draw_diagonal_stripes(self, target: pygame.Surface) -> None:
         if COLOR_STRIPE_ALPHA <= 0:
@@ -229,6 +276,24 @@ class Renderer:
         for i in range(-2 * h, 2 * w, stride):
             pygame.draw.line(overlay, c, (i, 0), (i + int(h * 0.62), h), thick)
         target.blit(overlay, (0, 0))
+
+    def draw_background(self) -> None:
+        self.screen.fill(COLOR_BG)
+        if BACKGROUND_USE_IMAGE and self.bg_image_orig:
+            curr_size = self.screen.get_size()
+            if self.last_screen_size != curr_size:
+                self.bg_image_scaled = pygame.transform.smoothscale(
+                    self.bg_image_orig, curr_size
+                )
+                self.last_screen_size = curr_size
+            if self.bg_image_scaled:
+                dim = pygame.Surface(curr_size, pygame.SRCALPHA)
+                dim.fill((12, 18, 32, 210))
+                self.screen.blit(self.bg_image_scaled, (0, 0))
+                self.screen.blit(dim, (0, 0))
+        self._draw_diagonal_stripes(self.screen)
+
+    # ── card shadows / bevels ──────────────────────────────────────────────
 
     def _draw_soft_card_shadow(self, card_rect: pygame.Rect) -> None:
         ox, oy = CARD_SHADOW_OFFSET, CARD_SHADOW_OFFSET + 1
@@ -250,7 +315,6 @@ class Renderer:
             self.screen.blit(layer, (lx, ly))
 
     def _draw_card_bevel(self, card_rect: pygame.Rect) -> None:
-        """Subtle raised-card look: light along top, soft shade toward bottom-right."""
         w, h = CARD_WIDTH, CARD_HEIGHT
         r = CARD_CORNER_RADIUS
         gr = max(2, r - 2)
@@ -274,177 +338,10 @@ class Renderer:
         ov.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         self.screen.blit(ov, card_rect.topleft)
 
-    def draw_background(self) -> None:
-        self.screen.fill(COLOR_BG)
-        if BACKGROUND_USE_IMAGE and self.bg_image_orig:
-            curr_size = self.screen.get_size()
-            if self.last_screen_size != curr_size:
-                self.bg_image_scaled = pygame.transform.smoothscale(self.bg_image_orig, curr_size)
-                self.last_screen_size = curr_size
-            if self.bg_image_scaled:
-                dim = pygame.Surface(curr_size, pygame.SRCALPHA)
-                dim.fill((12, 18, 32, 210))
-                self.screen.blit(self.bg_image_scaled, (0, 0))
-                self.screen.blit(dim, (0, 0))
-        self._draw_diagonal_stripes(self.screen)
+    # ── generic bevel face (green, used for menu items) ────────────────────
 
-    def _draw_footer_inset_cell(self, rect: pygame.Rect) -> None:
-        """Sunken field: darker top/left, lighter bottom/right (classic Win32)."""
-        pygame.draw.rect(self.screen, FOOTER_PANEL_FACE, rect)
-        x, y, w, h = rect
-        pygame.draw.line(self.screen, FOOTER_BEVEL_DK, (x, y), (x + w - 1, y), 1)
-        pygame.draw.line(self.screen, FOOTER_BEVEL_DK, (x, y), (x, y + h - 1), 1)
-        pygame.draw.line(self.screen, FOOTER_BEVEL_LT, (x, y + h - 1), (x + w - 1, y + h - 1), 1)
-        pygame.draw.line(self.screen, FOOTER_BEVEL_LT, (x + w - 1, y), (x + w - 1, y + h - 1), 1)
-
-    def _draw_footer_resize_grip(self, bar_top: int) -> None:
-        w = self.screen.get_width()
-        gx = w - FOOTER_GRIP_WIDTH
-        cy = bar_top + FOOTER_HEIGHT // 2
-        c = (120, 118, 115)
-        for i in range(3):
-            o = i * 4
-            pygame.draw.line(
-                self.screen,
-                c,
-                (gx + 3 + o, cy + 4 - o),
-                (gx + 9 + o, cy - 2 - o),
-                1,
-            )
-
-    def draw_footer_bar(
-        self,
-        score: int,
-        elapsed: float,
-        moves: int,
-        foundation_cards: int,
-        deal_label: str,
-        freecells_occupied: int,
-    ) -> None:
-        w, h = self.screen.get_size()
-        bar_top = h - FOOTER_HEIGHT
-        pygame.draw.rect(self.screen, FOOTER_BG, (0, bar_top, w, FOOTER_HEIGHT))
-
-        mins = int(elapsed) // 60
-        secs = int(elapsed) % 60
-        labels = [
-            f"{mins}:{secs:02d}",
-            f"{foundation_cards}/52",
-            deal_label,
-            f"{freecells_occupied}/4 · {moves} · {score}",
-        ]
-
-        inner = FOOTER_INNER_MARGIN
-        gap = FOOTER_PANEL_GAP
-        pad_x = FOOTER_PANEL_PAD_X
-        row_h = FOOTER_HEIGHT - 2 * inner
-        y_cell = bar_top + inner
-        x = inner
-
-        max_text_w = w - inner * 2 - FOOTER_GRIP_WIDTH - gap * (len(labels) - 1) - 8
-        surfaces = [self.font_footer_info.render(s, True, FOOTER_TEXT) for s in labels]
-        natural = sum(su.get_width() + 2 * pad_x for su in surfaces) + gap * (len(labels) - 1)
-        stretch_id = 2
-        extra = max(0, max_text_w - natural)
-        widths: list[int] = []
-        for i, su in enumerate(surfaces):
-            cell_w = su.get_width() + 2 * pad_x
-            if i == stretch_id:
-                cell_w += extra
-            widths.append(cell_w)
-
-        for i, su in enumerate(surfaces):
-            cw = widths[i]
-            cell = pygame.Rect(x, y_cell, cw, row_h)
-            self._draw_footer_inset_cell(cell)
-            tx = x + pad_x + (cw - 2 * pad_x - su.get_width()) // 2
-            ty = bar_top + (FOOTER_HEIGHT - su.get_height()) // 2
-            self.screen.blit(su, (tx, ty))
-            x += cw + gap
-
-        self._draw_footer_resize_grip(bar_top)
-
-    def draw_new_game_menu(self, mode: str, category: str | None, hover: str | None) -> None:
-        """Dim board + pick difficulty (easy/medium/hard) then pick LEVEL."""
-        sw, sh = self.screen.get_size()
-        dim = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        dim.fill((8, 24, 12, 150))
-        self.screen.blit(dim, (0, 0))
-        if mode == "levels":
-            cat = category or "easy"
-            lo, hi = NEW_GAME_LEVEL_RANGES.get(cat, (1, 1))
-            title = self.font_button.render(
-                f"New game — {cat} level ({lo}-{hi})",
-                True,
-                (248, 250, 252),
-            )
-            opts = [(str(lvl), str(lvl)) for lvl in range(lo, hi + 1)]
-        else:
-            title = self.font_button.render("New game — difficulty", True, (248, 250, 252))
-            opts = [("easy", "Easy"), ("medium", "Medium"), ("hard", "Hard")]
-
-        self.screen.blit(title, title.get_rect(center=(sw // 2, sh // 2 - 72)))
-        bw, bh = 168, 52
-        gap = 14
-        total_w = len(opts) * bw + (len(opts) - 1) * gap
-        x0 = (sw - total_w) // 2
-        y0 = sh // 2 - 10
-        cr = min(12, bh // 3)
-        for i, (key, label) in enumerate(opts):
-            rect = pygame.Rect(x0 + i * (bw + gap), y0, bw, bh)
-            is_h = hover == key
-            face = self._fab_inner_face(bw, bh, cr, False, is_h)
-            self.screen.blit(face, rect.topleft)
-            line = (240, 255, 250) if is_h else (190, 210, 195)
-            pygame.draw.rect(self.screen, line, rect, width=2, border_radius=cr)
-            txt = self.font_footer_info.render(label, True, (255, 255, 255) if is_h else (235, 245, 238))
-            self.screen.blit(txt, txt.get_rect(center=rect.center))
-        hint = self.font_footer_info.render("Click outside to cancel", True, (200, 215, 205))
-        self.screen.blit(hint, hint.get_rect(center=(sw // 2, y0 + bh + 36)))
-
-    def _button_inner_face(
-        self,
-        w: int,
-        h: int,
-        radius: int,
-        is_pressed: bool,
-        is_hover: bool,
-    ) -> pygame.Surface:
-        body = pygame.Surface((w, h), pygame.SRCALPHA)
-        steps = max(6, h // 3)
-        for s in range(steps):
-            t = s / max(steps - 1, 1)
-            if is_pressed:
-                top, bot = (78, 82, 88), (58, 62, 68)
-            elif is_hover:
-                top, bot = (118, 122, 130), (88, 92, 100)
-            else:
-                top, bot = (98, 102, 112), (68, 72, 80)
-            c = _lerp_color(bot, top, t)
-            y0 = int(s * h / steps)
-            y1 = int((s + 1) * h / steps)
-            pygame.draw.rect(body, (*c, 255), pygame.Rect(0, y0, w, max(1, y1 - y0)))
-        gloss = pygame.Surface((w, h), pygame.SRCALPHA)
-        gr = max(2, radius - 2)
-        pygame.draw.rect(
-            gloss,
-            (255, 255, 255, 48),
-            pygame.Rect(2, 2, w - 4, max(6, h // 3)),
-            border_radius=gr,
-        )
-        body.blit(gloss, (0, 0))
-        mask = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
-        body.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        return body
-
-    def _fab_inner_face(
-        self,
-        w: int,
-        h: int,
-        radius: int,
-        is_pressed: bool,
-        is_hover: bool,
+    def _menu_inner_face(
+        self, w: int, h: int, radius: int, is_pressed: bool, is_hover: bool
     ) -> pygame.Surface:
         body = pygame.Surface((w, h), pygame.SRCALPHA)
         steps = max(6, h // 3)
@@ -470,20 +367,23 @@ class Renderer:
         )
         body.blit(gloss, (0, 0))
         mask = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
+        pygame.draw.rect(
+            mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius
+        )
         body.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         return body
 
+    # ── felt slots ─────────────────────────────────────────────────────────
+
     def _draw_sunken_felt_slot(
-        self,
-        rect: pygame.Rect,
-        *,
-        highlighted: bool = False,
+        self, rect: pygame.Rect, *, highlighted: bool = False
     ) -> None:
         w, h = rect.size
         r = min(CARD_CORNER_RADIUS, min(w, h) // 2)
         surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (*COLOR_FELT_SLOT_FACE, 255), surf.get_rect(), border_radius=r)
+        pygame.draw.rect(
+            surf, (*COLOR_FELT_SLOT_FACE, 255), surf.get_rect(), border_radius=r
+        )
         dk = COLOR_FELT_BEVEL_SHADOW
         lt = COLOR_FELT_BEVEL_HIGHLIGHT
         ln = 2
@@ -494,35 +394,35 @@ class Renderer:
         self.screen.blit(surf, rect.topleft)
         if highlighted:
             pygame.draw.rect(
-                self.screen,
-                COLOR_SLOT_TARGET_RING,
-                rect,
-                width=3,
-                border_radius=r,
+                self.screen, COLOR_SLOT_TARGET_RING, rect, width=3, border_radius=r
             )
 
-    def draw_slot(self, rect: pygame.Rect, label: str = "", highlighted: bool = False) -> None:
+    def draw_slot(
+        self, rect: pygame.Rect, label: str = "", highlighted: bool = False
+    ) -> None:
         pass
+
+    # ── cards ──────────────────────────────────────────────────────────────
 
     def draw_card(self, card: Card, x: float, y: float, shadow: bool = True) -> None:
         card_rect = pygame.Rect(round(x), round(y), CARD_WIDTH, CARD_HEIGHT)
         if shadow:
             self._draw_soft_card_shadow(card_rect)
-
         if card in self.card_images:
             self.screen.blit(self.card_images[card], card_rect)
         else:
-            pygame.draw.rect(self.screen, COLOR_CARD_FACE, card_rect, border_radius=CARD_CORNER_RADIUS)
-
+            pygame.draw.rect(
+                self.screen,
+                COLOR_CARD_FACE,
+                card_rect,
+                border_radius=CARD_CORNER_RADIUS,
+            )
             color = COLOR_CARD_RED if is_red(card.suit) else COLOR_CARD_BLACK
             label = self.font_card.render(card.label, True, color)
             self.screen.blit(label, (card_rect.x + 10, card_rect.y + 8))
-
-            suit = self.font_title.render(card.label[-1], True, color)
-            self.screen.blit(suit, (card_rect.right - 35, card_rect.bottom - 42))
-
+            suit_surf = self.font_title.render(card.label[-1], True, color)
+            self.screen.blit(suit_surf, (card_rect.right - 35, card_rect.bottom - 42))
         self._draw_card_bevel(card_rect)
-
         pygame.draw.rect(
             self.screen,
             CARD_FACE_OUTLINE_COLOR,
@@ -531,6 +431,8 @@ class Renderer:
             border_radius=CARD_CORNER_RADIUS,
         )
 
+    # ── static board (slots) ──────────────────────────────────────────────
+
     def draw_static_board(
         self,
         layout: BoardLayout,
@@ -538,20 +440,21 @@ class Renderer:
         highlight_targets: set[tuple[str, int]] | None = None,
     ) -> None:
         highlight_targets = highlight_targets or set()
-
         for i, rect in enumerate(layout.free_cells):
             highlighted = ("freecell", i) in highlight_targets
             self._draw_sunken_felt_slot(rect, highlighted=highlighted)
-
         for i, rect in enumerate(layout.foundations):
             highlighted = ("foundation", i) in highlight_targets
             self._draw_sunken_felt_slot(rect, highlighted=highlighted)
-
             suit = list(Suit)[i]
             if not state.foundations[suit]:
                 sym = SUIT_SYMBOLS[suit]
                 if is_red(suit):
-                    lo_c = (max(0, COLOR_CARD_RED[0] - 50), max(0, COLOR_CARD_RED[1] - 8), max(0, COLOR_CARD_RED[2] - 8))
+                    lo_c = (
+                        max(0, COLOR_CARD_RED[0] - 50),
+                        max(0, COLOR_CARD_RED[1] - 8),
+                        max(0, COLOR_CARD_RED[2] - 8),
+                    )
                     hi_c = COLOR_CARD_RED
                 else:
                     lo_c = (6, 7, 9)
@@ -562,119 +465,7 @@ class Renderer:
                 self.screen.blit(lo, lo.get_rect(center=(cx + 2, cy + 3)))
                 self.screen.blit(hi, hi.get_rect(center=(cx, cy)))
 
-    def draw_floating_toolbar(
-        self,
-        fab_x: int,
-        fab_y: int,
-        hover_main: str | None,
-        hover_algo: str | None,
-        pressed_main: str | None,
-        pressed_algo: str | None,
-        dragging: bool,
-    ) -> None:
-        """Single draggable floating strip: icons only; AI opens algorithm dropdown on hover."""
-        mx, my = pygame.mouse.get_pos()
-        mouse_pos = (mx, my)
-        cr = min(8, FAB_CELL // 2)
-
-        ow, oh = fab_outer_size()
-        outer = pygame.Rect(fab_x, fab_y, ow, oh)
-        sh = pygame.Surface((ow + 8, oh + 8), pygame.SRCALPHA)
-        pygame.draw.rect(
-            sh,
-            (0, 36, 8, FAB_SHADOW_ALPHA),
-            sh.get_rect(),
-            border_radius=FAB_RADIUS + 2,
-        )
-        self.screen.blit(sh, (outer.x - 2, outer.y + 3))
-
-        panel = pygame.Surface((ow, oh), pygame.SRCALPHA)
-        panel.fill(FAB_PANEL_FILL)
-        pygame.draw.rect(
-            panel,
-            FAB_PANEL_LINE,
-            panel.get_rect(),
-            width=1,
-            border_radius=FAB_RADIUS,
-        )
-        self.screen.blit(panel, outer.topleft)
-
-        rects = fab_icon_rects(fab_x, fab_y)
-        show_ai_dd = fab_ai_dropdown_visible(mouse_pos, fab_x, fab_y)
-
-        if show_ai_dd:
-            ai_cell = rects["AI"]
-            drop_outer, algo_rects = fab_ai_dropdown_layout(ai_cell)
-            dd_bg = pygame.Surface(drop_outer.size, pygame.SRCALPHA)
-            dd_bg.fill(FAB_PANEL_FILL)
-            pygame.draw.rect(dd_bg, FAB_PANEL_LINE, dd_bg.get_rect(), width=1, border_radius=10)
-            self.screen.blit(dd_bg, drop_outer.topleft)
-            drr = min(6, FAB_AI_DROPDOWN_ROW_H // 2)
-            for algo in FAB_AI_ALGO_ORDER:
-                ar = algo_rects[algo]
-                is_h = hover_algo == algo
-                is_p = pressed_algo == algo
-                acc = SOLVER_BTN_ACCENTS.get(algo, (140, 140, 150))
-                face = self._fab_inner_face(ar.w, ar.h, drr, bool(is_p), bool(is_h))
-                self.screen.blit(face, ar.topleft)
-                line = (230, 255, 236) if is_p else ((190, 245, 200) if is_h else (64, 118, 72))
-                pygame.draw.rect(self.screen, line, ar, width=2, border_radius=drr)
-                strip = pygame.Rect(ar.left + 2, ar.top + 4, 3, ar.height - 8)
-                pygame.draw.rect(self.screen, acc, strip, border_radius=1)
-                if is_h:
-                    t = self.font_fab_dd_hover.render(algo, True, (255, 255, 255))
-                else:
-                    t = self.font_small.render(algo, True, (245, 248, 252))
-                self.screen.blit(t, t.get_rect(center=ar.center))
-
-        for key, cell in rects.items():
-            is_h = not dragging and hover_main == key
-            is_p = pressed_main == key
-            dy = 1 if is_p else (-1 if is_h else 0)
-            btn = cell.move(0, dy)
-
-            if key == "HINT" and is_h and not dragging:
-                for g in range(4, 0, -1):
-                    glow = pygame.Surface((btn.w + g * 3, btn.h + g * 3), pygame.SRCALPHA)
-                    a = max(0, 22 - g * 5)
-                    pygame.draw.rect(
-                        glow,
-                        (*COLOR_HINT_GLOW[:3], a),
-                        glow.get_rect(),
-                        border_radius=cr + g,
-                    )
-                    self.screen.blit(glow, glow.get_rect(center=btn.center).topleft)
-
-            face = self._fab_inner_face(btn.w, btn.h, cr, bool(is_p), bool(is_h))
-            self.screen.blit(face, btn.topleft)
-            line = (240, 255, 245) if is_p else ((200, 248, 210) if is_h else (72, 128, 82))
-            pygame.draw.rect(self.screen, line, btn, width=2, border_radius=cr)
-
-            ch = TOOLBAR_BUTTON_GLYPHS.get(key, "")
-            if ch:
-                gcol = (255, 255, 255) if is_h else (245, 248, 252)
-                gsurf = self.font_button_glyph.render(ch, True, gcol)
-                self.screen.blit(gsurf, gsurf.get_rect(center=btn.center))
-
-        if not dragging and hover_main and hover_main in FAB_TOOLTIPS:
-            tip = self.font_fab_tip.render(FAB_TOOLTIPS[hover_main], True, (255, 255, 255))
-            cell = rects[hover_main]
-            sw = self.screen.get_width()
-            pad_x, pad_y = 10, 6
-            gap = 8
-            tw, th = tip.get_size()
-            bg_w, bg_h = tw + pad_x * 2, th + pad_y * 2
-            bg_x = cell.right + gap
-            if bg_x + bg_w > sw - 8:
-                bg_x = max(8, sw - bg_w - 8)
-            bg_y = cell.centery - bg_h // 2
-            bg_y = max(4, min(bg_y, self.screen.get_height() - bg_h - 4))
-            bg = pygame.Surface((bg_w, bg_h), pygame.SRCALPHA)
-            pygame.draw.rect(bg, (0, 0, 0, 200), bg.get_rect(), border_radius=6)
-            self.screen.blit(bg, (bg_x, bg_y))
-            tip_x = bg_x + bg_w - pad_x - tw
-            tip_y = bg_y + pad_y
-            self.screen.blit(tip, (tip_x, tip_y))
+    # ── state cards ────────────────────────────────────────────────────────
 
     def draw_state_cards(
         self,
@@ -687,15 +478,10 @@ class Renderer:
     ) -> None:
         hidden_cards = hidden_cards or set()
         for i, card in enumerate(state.free_cells):
-            if card is None:
-                continue
-            if hidden_freecell == i:
-                continue
-            if card in hidden_cards:
+            if card is None or hidden_freecell == i or card in hidden_cards:
                 continue
             rect = layout.free_cells[i]
             self.draw_card(card, rect.x, rect.y)
-
         for i, suit in enumerate(Suit):
             if hidden_foundation == i:
                 continue
@@ -705,7 +491,6 @@ class Renderer:
                     continue
                 rect = layout.foundations[i]
                 self.draw_card(pile[-1], rect.x, rect.y)
-
         for col_idx, col in enumerate(state.tableau):
             hidden_from = -1
             if hidden_tableau and hidden_tableau[0] == col_idx:
@@ -717,6 +502,279 @@ class Renderer:
                     continue
                 rect = layout.card_rect_in_tableau(col_idx, row_idx)
                 self.draw_card(card, rect.x, rect.y)
+
+    # ── footer bar ─────────────────────────────────────────────────────────
+
+    def _draw_footer_inset_cell(self, rect: pygame.Rect) -> None:
+        pygame.draw.rect(self.screen, FOOTER_PANEL_FACE, rect)
+        x, y, w, h = rect
+        pygame.draw.line(self.screen, FOOTER_BEVEL_DK, (x, y), (x + w - 1, y), 1)
+        pygame.draw.line(self.screen, FOOTER_BEVEL_DK, (x, y), (x, y + h - 1), 1)
+        pygame.draw.line(
+            self.screen, FOOTER_BEVEL_LT, (x, y + h - 1), (x + w - 1, y + h - 1), 1
+        )
+        pygame.draw.line(
+            self.screen, FOOTER_BEVEL_LT, (x + w - 1, y), (x + w - 1, y + h - 1), 1
+        )
+
+    def _draw_footer_raised_button(
+        self, rect: pygame.Rect, is_hover: bool, is_active: bool
+    ) -> None:
+        """Classic bevel button (raised normally, sunken when active)."""
+        x, y, w, h = rect
+        if is_active:
+            face = (210, 206, 197)
+            tl, br = FOOTER_BEVEL_DK, FOOTER_BEVEL_LT
+        elif is_hover:
+            face = (250, 247, 240)
+            tl, br = FOOTER_BEVEL_LT, FOOTER_BEVEL_DK
+        else:
+            face = FOOTER_PANEL_FACE
+            tl, br = FOOTER_BEVEL_LT, FOOTER_BEVEL_DK
+        pygame.draw.rect(self.screen, face, rect)
+        pygame.draw.line(self.screen, tl, (x, y), (x + w - 1, y), 1)
+        pygame.draw.line(self.screen, tl, (x, y), (x, y + h - 1), 1)
+        pygame.draw.line(self.screen, br, (x, y + h - 1), (x + w - 1, y + h - 1), 1)
+        pygame.draw.line(self.screen, br, (x + w - 1, y), (x + w - 1, y + h - 1), 1)
+
+    def draw_footer_bar(
+        self,
+        score: int,
+        elapsed: float,
+        moves: int,
+        foundation_cards: int,
+        deal_label: str,
+        freecells_occupied: int,
+        menu_btn_hover: bool = False,
+        menu_is_open: bool = False,
+        solver_anim_time: float = -1.0,
+    ) -> None:
+        w, h = self.screen.get_size()
+        bar_top = h - FOOTER_HEIGHT
+        pygame.draw.rect(self.screen, FOOTER_BG, (0, bar_top, w, FOOTER_HEIGHT))
+
+        mins = int(elapsed) // 60
+        secs = int(elapsed) % 60
+        labels = [
+            f"{mins}:{secs:02d}",
+            f"{foundation_cards}/52",
+            f"{freecells_occupied}/4 \u00b7 {moves} \u00b7 {score}",
+            deal_label,
+        ]
+
+        inner = FOOTER_INNER_MARGIN
+        gap = FOOTER_PANEL_GAP
+        pad_x = FOOTER_PANEL_PAD_X
+        row_h = FOOTER_HEIGHT - 2 * inner
+        y_cell = bar_top + inner
+
+        # Reserve space for menu button
+        btn_size = FOOTER_HEIGHT - 2 * MENU_BTN_MARGIN
+        btn_area = btn_size + MENU_BTN_MARGIN + gap
+        x = inner
+
+        max_text_w = w - inner - btn_area - gap * 3
+        surfaces = [self.font_footer_info.render(s, True, FOOTER_TEXT) for s in labels]
+        natural = sum(su.get_width() + 2 * pad_x for su in surfaces)
+        stretch_id = 3  # deal_label stretches
+        extra = max(0, max_text_w - natural)
+        widths: list[int] = []
+        for i, su in enumerate(surfaces):
+            cell_w = su.get_width() + 2 * pad_x
+            if i == stretch_id:
+                cell_w += extra
+            widths.append(cell_w)
+
+        for i, su in enumerate(surfaces):
+            cw = widths[i]
+            cell = pygame.Rect(x, y_cell, cw, row_h)
+            self._draw_footer_inset_cell(cell)
+            tx = x + pad_x + (cw - 2 * pad_x - su.get_width()) // 2
+            ty = bar_top + (FOOTER_HEIGHT - su.get_height()) // 2
+            self.screen.blit(su, (tx, ty))
+            x += cw + gap
+
+        # ☰ menu button
+        btn_rect = menu_button_rect(w, h)
+        self._draw_footer_raised_button(btn_rect, menu_btn_hover, menu_is_open)
+        # Draw three horizontal lines (hamburger icon)
+        lc = (30, 30, 30) if menu_btn_hover or menu_is_open else FOOTER_TEXT
+        cx, cy = btn_rect.center
+        half = btn_size // 3
+        for dy in [-4, 0, 4]:
+            pygame.draw.line(
+                self.screen, lc, (cx - half, cy + dy), (cx + half, cy + dy), 2
+            )
+
+        # Draw walking loading gif over footer if solving
+        if solver_anim_time >= 0.0 and self.loading_frames:
+            duration = 4.0
+            progress = (solver_anim_time % duration) / duration
+
+            frame_idx = int(solver_anim_time * 10) % len(self.loading_frames)
+            frame_surf = self.loading_frames[frame_idx]
+            frame_w, frame_h = frame_surf.get_size()
+
+            anim_x = int(progress * (w + frame_w)) - frame_w
+            # Walk ON TOP of the footer bar, not inside it
+            anim_y = bar_top - frame_h
+
+            self.screen.blit(frame_surf, (anim_x, anim_y))
+
+    # ── dropup menu ────────────────────────────────────────────────────────
+
+    def draw_dropup(
+        self,
+        outer: pygame.Rect,
+        item_rects: dict[str, pygame.Rect],
+        hover_item: str | None,
+    ) -> None:
+        # Shadow
+        sh = pygame.Surface((outer.w + 6, outer.h + 6), pygame.SRCALPHA)
+        pygame.draw.rect(
+            sh, (0, 0, 0, 50), sh.get_rect(), border_radius=MENU_DROPUP_RADIUS + 2
+        )
+        self.screen.blit(sh, (outer.x - 2, outer.y + 3))
+        # Background
+        bg = pygame.Surface(outer.size, pygame.SRCALPHA)
+        bg.fill(MENU_BG)
+        pygame.draw.rect(
+            bg, MENU_BORDER, bg.get_rect(), width=1, border_radius=MENU_DROPUP_RADIUS
+        )
+        self.screen.blit(bg, outer.topleft)
+        # Items
+        for key in MENU_ITEMS:
+            rect = item_rects[key]
+            is_h = hover_item == key
+            has_sub = key in MENU_ITEMS_WITH_SUBMENU
+            self._draw_dropup_item(rect, key, is_h, has_sub)
+
+    def _draw_dropup_item(
+        self, rect: pygame.Rect, label: str, is_hover: bool, has_submenu: bool
+    ) -> None:
+        r = min(5, rect.h // 2)
+        if is_hover:
+            pygame.draw.rect(self.screen, MENU_HOVER_FACE, rect, border_radius=r)
+            # Raised bevel
+            pygame.draw.line(
+                self.screen,
+                FOOTER_BEVEL_LT,
+                (rect.x, rect.y),
+                (rect.right - 1, rect.y),
+                1,
+            )
+            pygame.draw.line(
+                self.screen,
+                FOOTER_BEVEL_LT,
+                (rect.x, rect.y),
+                (rect.x, rect.bottom - 1),
+                1,
+            )
+            pygame.draw.line(
+                self.screen,
+                FOOTER_BEVEL_DK,
+                (rect.x, rect.bottom - 1),
+                (rect.right - 1, rect.bottom - 1),
+                1,
+            )
+            pygame.draw.line(
+                self.screen,
+                FOOTER_BEVEL_DK,
+                (rect.right - 1, rect.y),
+                (rect.right - 1, rect.bottom - 1),
+                1,
+            )
+        tc = MENU_TEXT_HOVER if is_hover else MENU_TEXT_COLOR
+        # Glyph
+        glyph = MENU_GLYPHS.get(label, "")
+        if glyph:
+            gs = self.font_menu_glyph.render(glyph, True, tc)
+            self.screen.blit(gs, (rect.x + 10, rect.centery - gs.get_height() // 2))
+        # Text
+        display = label.title()
+        if label == "NEW GAME":
+            display = "New Game"
+        ts = self.font_menu_item.render(display, True, tc)
+        self.screen.blit(ts, (rect.x + 32, rect.centery - ts.get_height() // 2))
+        # Arrow
+        if has_submenu:
+            ar = self.font_menu_item.render(MENU_ARROW, True, tc)
+            self.screen.blit(ar, (rect.right - 20, rect.centery - ar.get_height() // 2))
+
+    # ── generic submenu panel ──────────────────────────────────────────────
+
+    def draw_submenu(
+        self,
+        outer: pygame.Rect,
+        items: list[tuple[str, str]],
+        item_rects: dict[str, pygame.Rect],
+        hover_item: str | None,
+        has_sub: bool = False,
+        accent_map: dict[str, tuple[int, int, int]] | None = None,
+    ) -> None:
+        # Shadow
+        sh = pygame.Surface((outer.w + 4, outer.h + 4), pygame.SRCALPHA)
+        pygame.draw.rect(
+            sh, (0, 0, 0, 40), sh.get_rect(), border_radius=MENU_SUBMENU_RADIUS + 2
+        )
+        self.screen.blit(sh, (outer.x - 1, outer.y + 2))
+        # Background
+        bg = pygame.Surface(outer.size, pygame.SRCALPHA)
+        bg.fill(MENU_BG)
+        pygame.draw.rect(
+            bg, MENU_BORDER, bg.get_rect(), width=1, border_radius=MENU_SUBMENU_RADIUS
+        )
+        self.screen.blit(bg, outer.topleft)
+        # Items
+        for key, display in items:
+            rect = item_rects[key]
+            is_h = hover_item == key
+            r = min(4, rect.h // 2)
+            if is_h:
+                pygame.draw.rect(self.screen, MENU_HOVER_FACE, rect, border_radius=r)
+                pygame.draw.line(
+                    self.screen,
+                    FOOTER_BEVEL_LT,
+                    (rect.x, rect.y),
+                    (rect.right - 1, rect.y),
+                    1,
+                )
+                pygame.draw.line(
+                    self.screen,
+                    FOOTER_BEVEL_LT,
+                    (rect.x, rect.y),
+                    (rect.x, rect.bottom - 1),
+                    1,
+                )
+                pygame.draw.line(
+                    self.screen,
+                    FOOTER_BEVEL_DK,
+                    (rect.x, rect.bottom - 1),
+                    (rect.right - 1, rect.bottom - 1),
+                    1,
+                )
+                pygame.draw.line(
+                    self.screen,
+                    FOOTER_BEVEL_DK,
+                    (rect.right - 1, rect.y),
+                    (rect.right - 1, rect.bottom - 1),
+                    1,
+                )
+            tc = MENU_TEXT_HOVER if is_h else MENU_TEXT_COLOR
+            # Accent strip (for solver algorithms)
+            if accent_map and key in accent_map:
+                strip = pygame.Rect(rect.left + 3, rect.top + 5, 3, rect.height - 10)
+                pygame.draw.rect(self.screen, accent_map[key], strip, border_radius=1)
+            ts = self.font_menu_item.render(display, True, tc)
+            tx = rect.x + (14 if accent_map else 10)
+            self.screen.blit(ts, (tx, rect.centery - ts.get_height() // 2))
+            if has_sub:
+                ar = self.font_menu_item.render(MENU_ARROW, True, tc)
+                self.screen.blit(
+                    ar, (rect.right - 18, rect.centery - ar.get_height() // 2)
+                )
+
+    # ── overlays ───────────────────────────────────────────────────────────
 
     def draw_pause_overlay(self) -> None:
         overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
@@ -734,11 +792,26 @@ class Renderer:
         self.screen.blit(overlay, (0, 0))
         txt = self.font_win.render("YOU WIN!", True, COLOR_WIN)
         sub = self.font_title.render("Press R for a new deal", True, COLOR_TEXT)
-        self.screen.blit(txt, txt.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 24)))
-        self.screen.blit(sub, sub.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 24)))
+        self.screen.blit(
+            txt,
+            txt.get_rect(
+                center=(
+                    self.screen.get_width() // 2,
+                    self.screen.get_height() // 2 - 24,
+                )
+            ),
+        )
+        self.screen.blit(
+            sub,
+            sub.get_rect(
+                center=(
+                    self.screen.get_width() // 2,
+                    self.screen.get_height() // 2 + 24,
+                )
+            ),
+        )
 
     def draw_solver_timeout_game_over_overlay(self) -> None:
-        """Shown when auto-solve exceeds SOLVER_AUTOSOLVE_TIMEOUT_S."""
         overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 140))
         self.screen.blit(overlay, (0, 0))

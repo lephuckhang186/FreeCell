@@ -14,10 +14,14 @@ class GameState:
     # 8 tableau columns
     tableau: list[list[Card]] = field(default_factory=lambda: [[] for _ in range(8)])
     # 4 free cells (None means empty)
-    free_cells: list[Card | None] = field(default_factory=lambda: [None, None, None, None])
+    free_cells: list[Card | None] = field(
+        default_factory=lambda: [None, None, None, None]
+    )
     # 4 foundation piles by suit
     foundations: dict[Suit, list[Card]] = field(
-        default_factory=lambda: {s: [] for s in (Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES)}
+        default_factory=lambda: {
+            s: [] for s in (Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES)
+        }
     )
     won: bool = False
 
@@ -25,7 +29,9 @@ class GameState:
         clone = GameState()
         clone.tableau = [list(col) for col in self.tableau]
         clone.free_cells = list(self.free_cells)
-        clone.foundations = {suit: list(pile) for suit, pile in self.foundations.items()}
+        clone.foundations = {
+            suit: list(pile) for suit, pile in self.foundations.items()
+        }
         clone.won = self.won
         return clone
 
@@ -41,33 +47,33 @@ def get_card_from_str(card_str: str) -> Card:
     """Convert a string like 'AH', 'TC', '2D' to a Card object."""
     rank_char = card_str[0]
     suit_char = card_str[1]
-    
+
     # Map rank
-    if rank_char == 'A':
+    if rank_char == "A":
         rank = 1
-    elif rank_char == 'T':
+    elif rank_char == "T":
         rank = 10
-    elif rank_char == 'J':
+    elif rank_char == "J":
         rank = 11
-    elif rank_char == 'Q':
+    elif rank_char == "Q":
         rank = 12
-    elif rank_char == 'K':
+    elif rank_char == "K":
         rank = 13
     else:
         rank = int(rank_char)
-        
+
     # Map suit
-    if suit_char == 'C':
+    if suit_char == "C":
         suit = Suit.CLUBS
-    elif suit_char == 'D':
+    elif suit_char == "D":
         suit = Suit.DIAMONDS
-    elif suit_char == 'H':
+    elif suit_char == "H":
         suit = Suit.HEARTS
-    elif suit_char == 'S':
+    elif suit_char == "S":
         suit = Suit.SPADES
     else:
         raise ValueError(f"Unknown suit: {suit_char}")
-        
+
     return Card(suit=suit, rank=rank)
 
 
@@ -90,7 +96,9 @@ def _parse_testcase_lines(lines: list[str]) -> GameState:
                     if top_card_str.lower() != "empty" and top_card_str:
                         top_card = get_card_from_str(top_card_str)
                         suit = top_card.suit
-                        state.foundations[suit] = [Card(suit, r) for r in range(1, top_card.rank + 1)]
+                        state.foundations[suit] = [
+                            Card(suit, r) for r in range(1, top_card.rank + 1)
+                        ]
 
             elif current_section == "[FREECELL]":
                 parts = line.split(":")
@@ -122,7 +130,9 @@ def _parse_testcase_lines(lines: list[str]) -> GameState:
 def load_game_from_testcase_file(relative_path: str) -> GameState:
     """Load ``relative_path`` under the project root (use ``/`` in path)."""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    file_path = os.path.normpath(os.path.join(base_dir, relative_path.replace("/", os.sep)))
+    file_path = os.path.normpath(
+        os.path.join(base_dir, relative_path.replace("/", os.sep))
+    )
     if not os.path.exists(file_path):
         print(f"Khong tim thay {file_path}, dang fall back ve default deal.")
         return deal_new_game()
@@ -147,4 +157,3 @@ def deal_new_game(seed: int | None = None) -> GameState:
     for idx, card in enumerate(deck):
         state.tableau[idx % 8].append(card)
     return state
-

@@ -16,21 +16,23 @@ from .constants import (
     DOUBLE_CLICK_SECONDS,
     DRAG_SMOOTH_FACTOR,
     DROP_ANIM_DURATION,
-    FAB_DRAG_THRESHOLD_SQ,
     FOOTER_HEIGHT,
     FPS,
+    MENU_ITEMS,
+    MENU_ITEMS_WITH_SUBMENU,
     NEW_GAME_LEVEL_RANGES,
-    OUTER_PADDING,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SOLVE_ALGO_ORDER,
     SOLVER_AUTOSOLVE_TIMEOUT_S,
+    SOLVER_BTN_ACCENTS,
     TITLE,
 )
 from .layout import BoardLayout
 from .rules import PileRef, PileType, apply_move, tableau_descending_alternating, validate_move
 from .models import Card, Suit
 from .state import GameState, get_card_from_str, load_game_from_testcase_file
-from .ui import Renderer, fab_hit_at, fab_outer_size
+from .ui import Renderer, menu_button_rect, dropup_layout, submenu_layout, sub2_layout
 from .algorithm import FreeCellSolver
 from . import generate_test
 
@@ -79,7 +81,6 @@ class FreeCellGame:
         pygame.init()
         pygame.display.set_caption(TITLE)
         width, height = self._compute_window_size()
-        # Standard framed window (not fullscreen / not borderless).
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
         self.layout = BoardLayout(self.screen.get_size())
@@ -87,7 +88,6 @@ class FreeCellGame:
 
         self.active_deal_label: str = ""
         self.state: GameState = self._build_generated_state(DEFAULT_NEW_GAME_DIFFICULTY, DEFAULT_NEW_GAME_LEVEL)
-        # Retry (R key): restore the exact same generated board without re-generating.
         self._retry_category: str = DEFAULT_NEW_GAME_DIFFICULTY
         self._retry_level: int = DEFAULT_NEW_GAME_LEVEL
         self._retry_state: GameState = self.state.clone()
@@ -114,114 +114,211 @@ class FreeCellGame:
         self.score: int = 0
         self.elapsed: float = 0.0
         self.moves: int = 0
-        self.pressed_button_label: str = ""
-        self.pressed_button_until: float = 0.0
         self.paused: bool = False
-        fw, fh = fab_outer_size()
-        sh = self.screen.get_height()
-        self.fab_x = float(OUTER_PADDING)
-        self.fab_y = float(sh - fh) / 2.0
-        self.fab_hover_main: str | None = None
-        self.fab_hover_algo: str | None = None
-        self._fab_down: tuple[int, int] | None = None
-        self._fab_dragging: bool = False
-        self._fab_grab: tuple[float, float] = (0.0, 0.0)
-        self.new_game_menu_open: bool = False
-        self.new_game_menu_hover: str | None = None
-        self.new_game_menu_mode: str = "difficulty"  # "difficulty" | "levels"
-        self.new_game_menu_category: str | None = None
+        # Bottom-right menu
+        self.menu_open: bool = False
+        self.menu_btn_hover: bool = False
+        self.menu_hover: str | None = None
+        self.submenu_hover: str | None = None
+        self.sub2_hover: str | None = None
 
-    def _clamp_fab(self) -> None:
+    # ── Menu helpers ──────────────────────────────────────────────────────
+
+    def _close_menu(self) -> None:
+        self.menu_open = False
+        self.menu_hover = None
+        self.submenu_hover = None
+        self.sub2_hover = None
+
+    def _update_menu_hover(self, pos: tuple[int, int]) -> None:
+        """Track hover across menu button, dropup, and cascading submenus.
+
+        Uses "bridge" rectangles in the gap between a parent item and its
+        flyout submenu so the user can move the cursor leftward without
+        the submenu vanishing.
+        """
         sw, sh = self.screen.get_size()
-        fw, fh = fab_outer_size()
-        self.fab_x = max(0.0, min(self.fab_x, float(sw - fw)))
-        self.fab_y = max(0.0, min(self.fab_y, float(sh - fh)))
+        self.menu_btn_hover = menu_button_rect(sw, sh).collidepoint(pos)
 
-    def _fab_pressed_flash(self) -> tuple[str | None, str | None]:
-        if time() > self.pressed_button_until:
-            return None, None
-        l = self.pressed_button_label
-        if l in ("IDS", "BFS", "UCS", "A*"):
-            return None, l
-        return l, None
-
-    def _update_fab_hover(self) -> None:
-        if self.new_game_menu_open or self._fab_dragging:
-            self.fab_hover_main = None
-            self.fab_hover_algo = None
+        if not self.menu_open:
             return
-        h = fab_hit_at(pygame.mouse.get_pos(), int(self.fab_x), int(self.fab_y))
-        if h[0] == "main":
-            self.fab_hover_main = h[1]
-            self.fab_hover_algo = None
-        elif h[0] == "algo":
-            self.fab_hover_main = None
-            self.fab_hover_algo = h[1]
-        else:
-            self.fab_hover_main = None
-            self.fab_hover_algo = None
 
-    def _fab_dispatch_main(self, key: str) -> None:
-        if key == "NEW GAME":
-            self.open_new_game_menu()
-        elif key == "UNDO":
-            self.undo()
-        elif key == "REDO":
-            self.redo()
-        elif key == "MENU":
-            self.toggle_pause()
-        elif key == "HINT":
-            pass
-        elif key == "AI":
-            pass
+        drop_outer, drop_rects = dropup_layout(sw, sh)
+        found_main: str | None = None
+        found_sub: str | None = None
+        found_sub2: str | None = None
 
-    def handle_fab_mousemove(self, pos: tuple[int, int]) -> None:
-        if self.new_game_menu_open:
-            return
-        if self._fab_down is None:
-            return
-        dx = pos[0] - self._fab_down[0]
-        dy = pos[1] - self._fab_down[1]
-        if dx * dx + dy * dy > FAB_DRAG_THRESHOLD_SQ:
-            self._fab_dragging = True
-        if self._fab_dragging:
-            self.fab_x = float(pos[0]) - self._fab_grab[0]
-            self.fab_y = float(pos[1]) - self._fab_grab[1]
-            self._clamp_fab()
+        # Helper: build a bridge rect between a parent item and its submenu outer
+        def _bridge(parent: "pygame.Rect", sub_outer: "pygame.Rect") -> "pygame.Rect":
+            top = min(parent.top, sub_outer.top)
+            bot = max(parent.bottom, sub_outer.bottom)
+            return pygame.Rect(sub_outer.right, top, parent.left - sub_outer.right + 4, bot - top)
 
-    def handle_fab_mousedown(self, pos: tuple[int, int]) -> bool:
-        if self.new_game_menu_open:
-            return False
-        h = fab_hit_at(pos, int(self.fab_x), int(self.fab_y))
-        if h[0] == "none":
-            return False
-        self._fab_down = pos
-        self._fab_dragging = False
-        self._fab_grab = (float(pos[0]) - self.fab_x, float(pos[1]) - self.fab_y)
-        return True
+        # 1. Check sub2 (level numbers) — deepest first
+        if self.menu_hover == "NEW GAME" and self.submenu_hover:
+            cat = self.submenu_hover
+            if cat in NEW_GAME_LEVEL_RANGES:
+                parent = drop_rects["NEW GAME"]
+                _, sub_rects = submenu_layout(parent, ["easy", "medium", "hard"], screen_h=sh)
+                if cat in sub_rects:
+                    lo, hi = NEW_GAME_LEVEL_RANGES[cat]
+                    levels = [str(l) for l in range(lo, hi + 1)]
+                    s2_outer, s2_rects = sub2_layout(sub_rects[cat], levels, screen_h=sh)
+                    for key in levels:
+                        if s2_rects[key].collidepoint(pos):
+                            found_sub2 = key
+                            found_sub = cat
+                            found_main = "NEW GAME"
+                            break
+                    # Bridge between difficulty item and level flyout
+                    if found_main is None:
+                        bridge = _bridge(sub_rects[cat], s2_outer)
+                        if s2_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                            found_sub = cat
+                            found_main = "NEW GAME"
 
-    def handle_fab_mouseup(self, pos: tuple[int, int]) -> bool:
-        if self.new_game_menu_open:
-            return False
-        if self._fab_down is None:
-            return False
-        was_drag = self._fab_dragging
-        self._fab_dragging = False
-        self._fab_down = None
-        if was_drag:
+        # 2. Check submenu
+        if found_main is None:
+            active = self.menu_hover
+            if active == "NEW GAME":
+                parent = drop_rects["NEW GAME"]
+                cats = ["easy", "medium", "hard"]
+                sub_outer, sub_rects = submenu_layout(parent, cats, screen_h=sh)
+                for key in cats:
+                    if sub_rects[key].collidepoint(pos):
+                        found_sub = key
+                        found_main = "NEW GAME"
+                        break
+                # Bridge between main item and difficulty flyout
+                if found_main is None:
+                    bridge = _bridge(parent, sub_outer)
+                    if sub_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                        found_main = "NEW GAME"
+            elif active == "SOLVE":
+                parent = drop_rects["SOLVE"]
+                algos = list(SOLVE_ALGO_ORDER)
+                sub_outer, sub_rects = submenu_layout(parent, algos, screen_h=sh)
+                for key in algos:
+                    if sub_rects[key].collidepoint(pos):
+                        found_sub = key
+                        found_main = "SOLVE"
+                        break
+                # Bridge between main item and algo flyout
+                if found_main is None:
+                    bridge = _bridge(parent, sub_outer)
+                    if sub_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                        found_main = "SOLVE"
+
+        # 3. Check main dropup
+        if found_main is None:
+            for key in MENU_ITEMS:
+                if drop_rects[key].collidepoint(pos):
+                    found_main = key
+                    break
+
+        self.menu_hover = found_main
+        self.submenu_hover = found_sub
+        self.sub2_hover = found_sub2
+
+    def _handle_menu_click(self, pos: tuple[int, int]) -> bool:
+        """Handle a click when the menu is open.  Returns True = consumed."""
+        sw, sh = self.screen.get_size()
+
+        # Click on menu button → close
+        if menu_button_rect(sw, sh).collidepoint(pos):
+            self._close_menu()
             return True
-        h = fab_hit_at(pos, int(self.fab_x), int(self.fab_y))
-        if h[0] == "algo" and h[1]:
-            self.pressed_button_label = h[1]
-            self.pressed_button_until = time() + 0.12
-            if self._solver_thread and self._solver_thread.is_alive():
-                self.set_status("Solver dang chay! Vui long doi...", 2.0)
-            else:
-                self.run_solver(h[1])
-        elif h[0] == "main" and h[1]:
-            self.pressed_button_label = h[1]
-            self.pressed_button_until = time() + 0.12
-            self._fab_dispatch_main(h[1])
+
+        # Sub2 click: level number → new deal
+        if self.menu_hover == "NEW GAME" and self.submenu_hover and self.sub2_hover:
+            try:
+                lvl = int(self.sub2_hover)
+                self._apply_new_deal(self.submenu_hover, lvl)
+            except ValueError:
+                pass
+            self._close_menu()
+            return True
+
+        # Submenu click: algorithm → run solver
+        if self.menu_hover == "SOLVE" and self.submenu_hover:
+            algo = self.submenu_hover
+            if algo in SOLVE_ALGO_ORDER:
+                if self._solver_thread and self._solver_thread.is_alive():
+                    self.set_status("Solver dang chay! Vui long doi...", 2.0)
+                else:
+                    self.run_solver(algo)
+            self._close_menu()
+            return True
+
+        # Main item click
+        drop_outer, drop_rects = dropup_layout(sw, sh)
+        for key in MENU_ITEMS:
+            if drop_rects[key].collidepoint(pos):
+                if key in MENU_ITEMS_WITH_SUBMENU:
+                    return True  # do nothing, submenus open on hover
+                if key == "UNDO":
+                    self.undo()
+                elif key == "REDO":
+                    self.redo()
+                elif key == "LOAD GAME":
+                    self._close_menu()
+                    self._load_game_dialog()
+                    return True
+                elif key == "PAUSE":
+                    self.toggle_pause()
+                self._close_menu()
+                return True
+
+    def _load_game_dialog(self) -> None:
+        import tkinter as tk
+        from tkinter import filedialog
+        from .state import _parse_testcase_lines
+        import os
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        testcase_dir = os.path.join(base_dir, "testcase")
+
+        file_path = filedialog.askopenfilename(
+            parent=root,
+            initialdir=testcase_dir if os.path.exists(testcase_dir) else base_dir,
+            title="Load Game",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
+        )
+        root.destroy()
+
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f.readlines()]
+                new_state = _parse_testcase_lines(lines)
+                
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                self.solution_moves.clear()
+                self.solver_stats = None
+                self._solver_result = None
+                self.win_anim = None
+                if self._solver_thread:
+                    self._solver_cancel_event.set()
+                self._solver_thread = None
+                self.solver_game_over = False
+                
+                self.state = new_state
+                self.moves = 0
+                self.score = 0
+                self.elapsed = 0.0
+                file_name = os.path.basename(file_path)
+                self.active_deal_label = f"Loaded: {file_name}"
+                self.set_status("Loaded successfully!", 3.0)
+            except Exception as e:
+                self.set_status(f"Load failed: {e}", 3.0)
+
+        # Click outside everything → close
+        self._close_menu()
         return True
 
     def toggle_pause(self) -> None:
@@ -235,13 +332,6 @@ class FreeCellGame:
         self.status_text = message
         self.status_until = time() + seconds
 
-    def open_new_game_menu(self) -> None:
-        self.new_game_menu_open = True
-        self.new_game_menu_hover = None
-        self.new_game_menu_mode = "difficulty"
-        self.new_game_menu_category = None
-        self.drag = None
-        self.mouse_down_pos = None
 
     def _build_generated_state(self, category: str, level: int) -> GameState:
         """Generate a fresh deal using freecell/generate_test.py at a specific LEVEL."""
@@ -281,13 +371,8 @@ class FreeCellGame:
         self.score = 0
         self.elapsed = 0.0
         self.moves = 0
-        self.pressed_button_label = ""
-        self.pressed_button_until = 0.0
         self.paused = False
-        self._fab_down = None
-        self._fab_dragging = False
-        self.new_game_menu_open = False
-        self.new_game_menu_hover = None
+        self._close_menu()
 
     def retry_current_deal(self) -> None:
         """Restore the last generated board (created by the most recent New game / level pick)."""
@@ -313,55 +398,10 @@ class FreeCellGame:
         self.score = 0
         self.elapsed = 0.0
         self.moves = 0
-        self.pressed_button_label = ""
-        self.pressed_button_until = 0.0
         self.paused = False
-        self._fab_down = None
-        self._fab_dragging = False
-        self.new_game_menu_open = False
-        self.new_game_menu_hover = None
-        self.new_game_menu_mode = "difficulty"
-        self.new_game_menu_category = None
+        self._close_menu()
 
-    def _new_game_menu_button_rects(self) -> list[tuple[pygame.Rect, str]]:
-        sw, sh = self.screen.get_size()
-        if self.new_game_menu_mode == "difficulty":
-            opts = [("easy", "Easy"), ("medium", "Medium"), ("hard", "Hard")]
-        else:
-            cat = self.new_game_menu_category or DEFAULT_NEW_GAME_DIFFICULTY
-            lo, hi = NEW_GAME_LEVEL_RANGES[cat]
-            opts = [(str(lvl), str(lvl)) for lvl in range(lo, hi + 1)]
-        bw, bh = 168, 52
-        gap = 14
-        total_w = len(opts) * bw + (len(opts) - 1) * gap
-        x0 = (sw - total_w) // 2
-        y0 = sh // 2 - 10
-        return [
-            (pygame.Rect(x0 + i * (bw + gap), y0, bw, bh), opts[i][0])
-            for i in range(len(opts))
-        ]
 
-    def _handle_new_game_menu_click(self, pos: tuple[int, int]) -> bool:
-        for rect, key in self._new_game_menu_button_rects():
-            if rect.collidepoint(pos):
-                if self.new_game_menu_mode == "difficulty":
-                    self.new_game_menu_mode = "levels"
-                    self.new_game_menu_category = key
-                    self.new_game_menu_hover = None
-                    return True
-                # levels mode
-                try:
-                    lvl = int(key)
-                except ValueError:
-                    return True
-                cat = self.new_game_menu_category or DEFAULT_NEW_GAME_DIFFICULTY
-                self._apply_new_deal(cat, lvl)
-                return True
-        self.new_game_menu_open = False
-        self.new_game_menu_hover = None
-        self.new_game_menu_mode = "difficulty"
-        self.new_game_menu_category = None
-        return True
 
     def add_score(self, delta: int) -> None:
         """Add delta to score, clamped to >= 0."""
@@ -388,7 +428,7 @@ class FreeCellGame:
             self.set_status("Solver dang chay, vui long doi!", 2.0)
             return
 
-        self.set_status(f"Dang giai bang {label}... Vui long doi...", 100.0)
+        self.set_status(f"Solving with {label}! Please wait...", 100.0)
         self._solver_result = None
         self._solver_label = label
         self._solver_started_at = time()
@@ -745,7 +785,7 @@ class FreeCellGame:
         return targets
 
     def update(self, dt: float) -> None:
-        self._update_fab_hover()
+        self._update_menu_hover(pygame.mouse.get_pos())
         # Advance game timer
         if not self.paused and not self.state.won and not self.solver_game_over:
             self.elapsed += dt
@@ -760,7 +800,7 @@ class FreeCellGame:
                     self.solver_stats = stats
                     self.solution_moves = stats["path"].copy()
                     self.set_status(
-                        f"Giai xong voi {self._solver_label}! Dang choi thu...", 3.0
+                        f"Solved with {self._solver_label}! Playing...", 3.0
                     )
                 else:
                     self.set_status(
@@ -788,6 +828,7 @@ class FreeCellGame:
             move = self.solution_moves.pop(0)
             old_state = deepcopy(self.state)
             apply_move(self.state, move[0], move[1], move[2])
+            self.moves += 1
             self.start_state_transition_animation(old_state, self.state, duration=0.15)
 
         if self.drag:
@@ -870,19 +911,26 @@ class FreeCellGame:
 
         n_found = sum(len(p) for p in self.state.foundations.values())
         n_fc = sum(1 for c in self.state.free_cells if c is not None)
+
+        deal_label_to_draw = self.active_deal_label
+        if self.status_text and time() <= self.status_until:
+            deal_label_to_draw = self.status_text
+
+        solver_anim_time = -1.0
+        if self._solver_thread and self._solver_thread.is_alive():
+            solver_anim_time = time() - self._solver_started_at
+
         self.renderer.draw_footer_bar(
             self.score,
             self.elapsed,
             self.moves,
             n_found,
-            self.active_deal_label,
+            deal_label_to_draw,
             n_fc,
+            menu_btn_hover=self.menu_btn_hover,
+            menu_is_open=self.menu_open,
+            solver_anim_time=solver_anim_time,
         )
-
-        if self.status_text and time() <= self.status_until:
-            font = pygame.font.SysFont("segoeui", 24, bold=True)
-            msg = font.render(self.status_text, True, (255, 216, 120))
-            self.screen.blit(msg, (24, self.screen.get_height() - FOOTER_HEIGHT - 36))
 
         if self.solver_game_over:
             self.renderer.draw_solver_timeout_game_over_overlay()
@@ -899,33 +947,48 @@ class FreeCellGame:
                 ]
                 if 'depth_reached' in stats:
                     lines.append(f"Depth Reached: {stats['depth_reached']}")
-
                 sy = self.screen.get_height() // 2 + 60
                 for line in lines:
                     text_surface = font.render(line, True, (255, 255, 255))
                     tw = text_surface.get_width()
                     self.screen.blit(text_surface, (self.screen.get_width() // 2 - tw // 2, sy))
                     sy += 36
-
         elif self.paused:
             self.renderer.draw_pause_overlay()
 
-        pm, pa = self._fab_pressed_flash()
-        self.renderer.draw_floating_toolbar(
-            int(self.fab_x),
-            int(self.fab_y),
-            self.fab_hover_main,
-            self.fab_hover_algo,
-            pm,
-            pa,
-            self._fab_dragging,
-        )
-        if self.new_game_menu_open:
-            self.renderer.draw_new_game_menu(
-                self.new_game_menu_mode,
-                self.new_game_menu_category,
-                self.new_game_menu_hover,
-            )
+        # ── Cascading menu ──
+        if self.menu_open:
+            sw, sh = self.screen.get_size()
+            drop_outer, drop_rects = dropup_layout(sw, sh)
+            self.renderer.draw_dropup(drop_outer, drop_rects, self.menu_hover)
+
+            # Submenu for NEW GAME → difficulty
+            if self.menu_hover == "NEW GAME":
+                cats = ["easy", "medium", "hard"]
+                parent = drop_rects["NEW GAME"]
+                sub_outer, sub_rects = submenu_layout(parent, cats, screen_h=sh)
+                items = [(c, c.title()) for c in cats]
+                self.renderer.draw_submenu(sub_outer, items, sub_rects, self.submenu_hover, has_sub=True)
+
+                # Sub-submenu: level numbers
+                if self.submenu_hover and self.submenu_hover in NEW_GAME_LEVEL_RANGES:
+                    lo, hi = NEW_GAME_LEVEL_RANGES[self.submenu_hover]
+                    levels = [str(l) for l in range(lo, hi + 1)]
+                    s2_outer, s2_rects = sub2_layout(sub_rects[self.submenu_hover], levels, screen_h=sh)
+                    s2_items = [(l, l) for l in levels]
+                    self.renderer.draw_submenu(s2_outer, s2_items, s2_rects, self.sub2_hover)
+
+            # Submenu for SOLVE → algorithms
+            elif self.menu_hover == "SOLVE":
+                algos = list(SOLVE_ALGO_ORDER)
+                parent = drop_rects["SOLVE"]
+                sub_outer, sub_rects = submenu_layout(parent, algos, screen_h=sh)
+                items = [(a, a) for a in algos]
+                self.renderer.draw_submenu(
+                    sub_outer, items, sub_rects, self.submenu_hover,
+                    accent_map=SOLVER_BTN_ACCENTS,
+                )
+
         pygame.display.flip()
 
     def run(self) -> None:
@@ -937,15 +1000,13 @@ class FreeCellGame:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        if self.new_game_menu_open:
-                            self.new_game_menu_open = False
-                            self.new_game_menu_hover = None
+                        if self.menu_open:
+                            self._close_menu()
                         else:
                             running = False
                     elif event.key == pygame.K_r:
-                        if self.new_game_menu_open:
-                            self.new_game_menu_open = False
-                            self.new_game_menu_hover = None
+                        if self.menu_open:
+                            self._close_menu()
                         else:
                             self.retry_current_deal()
                     elif event.key == pygame.K_p:
@@ -955,54 +1016,47 @@ class FreeCellGame:
                     elif not self.paused and event.key == pygame.K_y:
                         self.redo()
                 elif event.type == pygame.VIDEORESIZE:
-                    # Keep a regular window and re-center board layout on resize.
                     self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
                     self.layout.resize(self.screen.get_size())
-                    self._clamp_fab()
                 elif event.type == pygame.MOUSEMOTION:
-                    if self.new_game_menu_open:
-                        self.new_game_menu_hover = None
-                        for rect, key in self._new_game_menu_button_rects():
-                            if rect.collidepoint(event.pos):
-                                self.new_game_menu_hover = key
-                                break
-                    self.handle_fab_mousemove(event.pos)
+                    self._update_menu_hover(event.pos)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.new_game_menu_open:
-                        self._handle_new_game_menu_click(event.pos)
+                    # Menu open → route to menu handler
+                    if self.menu_open:
+                        self._handle_menu_click(event.pos)
                         continue
-                    if self.handle_fab_mousedown(event.pos):
+                    # Menu button click → open menu
+                    sw, sh = self.screen.get_size()
+                    if menu_button_rect(sw, sh).collidepoint(event.pos):
+                        self.menu_open = True
+                        self.drag = None
+                        self.mouse_down_pos = None
                         continue
                     if self.paused:
                         continue
                     if self.state.won or self.solver_game_over:
                         continue
-                    # pygame 2 provides event.clicks; fallback to timestamp check.
+                    # Double-click detection
                     is_double = bool(getattr(event, "clicks", 0) >= 2)
                     now = time()
                     if not is_double and now - self.last_click_at <= DOUBLE_CLICK_SECONDS:
                         is_double = True
                     self.last_click_at = now
-
                     if is_double and not self.drop_anim:
                         src_info = self.source_at_pos(event.pos, top_only_tableau=True)
                         if src_info:
                             src, idx = src_info
                             if self.try_auto_move_from_source(src, idx):
                                 continue
-
                     self.mouse_down_pos = event.pos
                     self.try_pick_from_pos(event.pos)
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    if self.new_game_menu_open:
-                        continue
-                    if self.handle_fab_mouseup(event.pos):
+                    if self.menu_open:
                         continue
                     if self.state.won or self.solver_game_over:
                         continue
                     if self.paused:
                         continue
-                    # Click without drag: try auto-move top card to foundation.
                     if self.mouse_down_pos and self.drag:
                         dx = abs(event.pos[0] - self.mouse_down_pos[0])
                         dy = abs(event.pos[1] - self.mouse_down_pos[1])

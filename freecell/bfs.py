@@ -87,4 +87,8 @@ class BfsSolverMixin:
                     queue.append((new_state, state_hash, depth + 1))
 
         search_time = time.time() - start_time
-        return {"path": None, "search_time": search_time, "expanded_nodes": expanded_nodes}
+        return {
+            "path": None,
+            "search_time": search_time,
+            "expanded_nodes": expanded_nodes,
+        }

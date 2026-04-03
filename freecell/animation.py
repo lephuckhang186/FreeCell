@@ -25,4 +25,3 @@ class Tween:
         x = self.start_x + (self.end_x - self.start_x) * t
         y = self.start_y + (self.end_y - self.start_y) * t
         return x, y, self.elapsed >= self.duration
-

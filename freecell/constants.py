@@ -38,52 +38,60 @@ BOARD_TOP_MARGIN = 40
 TABLEAU_GAP_BELOW_TOP = 20
 TOP_ROW_Y = BOARD_TOP_MARGIN
 TABLEAU_Y = TOP_ROW_Y + CARD_HEIGHT + TABLEAU_GAP_BELOW_TOP
-FOOTER_HEIGHT = 34                          # Classic status bar (cream + inset panels)
+FOOTER_HEIGHT = 34  # Classic status bar (cream + inset panels)
 FOOTER_INFO_FONT_SIZE = 15
-FOOTER_BG = (237, 233, 224)                   # ~#EDE9E0
-FOOTER_PANEL_FACE = (242, 239, 233)           # ~#F2EFE9
-FOOTER_TEXT = (51, 51, 51)                 # ~#333
-FOOTER_BEVEL_DK = (135, 135, 135)          # inset shadow (top / left)
-FOOTER_BEVEL_LT = (255, 255, 255)            # inset highlight (bottom / right)
+FOOTER_BG = (237, 233, 224)  # ~#EDE9E0
+FOOTER_PANEL_FACE = (242, 239, 233)  # ~#F2EFE9
+FOOTER_TEXT = (51, 51, 51)  # ~#333
+FOOTER_BEVEL_DK = (135, 135, 135)  # inset shadow (top / left)
+FOOTER_BEVEL_LT = (255, 255, 255)  # inset highlight (bottom / right)
 FOOTER_INNER_MARGIN = 3
 FOOTER_PANEL_GAP = 4
 FOOTER_PANEL_PAD_X = 10
 FOOTER_GRIP_WIDTH = 16
 SLOT_GAP_X = 24
 
-# Toolbar buttons: single rounded face + border (full hit rect)
-BUTTON_INNER_RADIUS = 9
-# Unicode glyphs shown left of toolbar labels (Segoe UI Symbol / fallback fonts)
-TOOLBAR_BUTTON_GLYPHS = {
-    "NEW GAME": "✚",
-    "UNDO": "↩",
-    "REDO": "↪",
-    "HINT": "?",
-    "MENU": "⏸",
-    "AI": "⌕",
-}
+# ── Bottom-right menu button (replaces floating toolbar) ──────────────────────
+MENU_BTN_MARGIN = 3
 
-# Floating toolbar (icon-only strip, draggable)
-FAB_CELL = 42
-FAB_GAP = 5
-FAB_PAD = 10
-FAB_RADIUS = 14
-FAB_AI_DROPDOWN_ROW_H = 28
-FAB_AI_DROPDOWN_WIDTH = 118  # vertical menu panel width (centered under AI cell)
-FAB_AI_DROPDOWN_GAP = 8  # vertical gap between AI cell and dropdown
-FAB_AI_DROPDOWN_OFFSET_X = 0  # nudge menu left (-) / right (+)
-FAB_AI_DROPDOWN_OFFSET_Y = 0  # nudge menu down (+)
-FAB_DRAG_THRESHOLD_SQ = 36  # px^2 before treating as drag
-FAB_MAIN_ORDER = ("NEW GAME", "UNDO", "REDO", "HINT", "MENU", "AI")
-FAB_AI_ALGO_ORDER = ("BFS", "IDS", "UCS", "A*")
-FAB_TOOLTIPS = {
-    "NEW GAME": "New game",
-    "UNDO": "Undo",
-    "REDO": "Redo",
-    "HINT": "Hint",
-    "MENU": "Pause",
-    "AI": "Solve",
+# Dropup menu (opens upward from the ☰ button)
+MENU_DROPUP_WIDTH = 174
+MENU_DROPUP_ROW_H = 32
+MENU_DROPUP_PAD = 5
+MENU_DROPUP_GAP = 4
+MENU_DROPUP_RADIUS = 8
+
+# Submenu (flies out to the left)
+MENU_SUBMENU_WIDTH = 120
+MENU_SUBMENU_ROW_H = 30
+MENU_SUBMENU_PAD = 4
+MENU_SUBMENU_GAP = 2
+MENU_SUBMENU_RADIUS = 6
+
+# Sub-submenu cells (level numbers)
+MENU_SUB2_CELL_W = 46
+MENU_SUB2_ROW_H = 28
+
+# Menu structure
+MENU_ITEMS = ("NEW GAME", "LOAD GAME", "UNDO", "REDO", "PAUSE", "SOLVE")
+MENU_ITEMS_WITH_SUBMENU = {"NEW GAME", "SOLVE"}
+MENU_GLYPHS = {
+    "NEW GAME": "\u271a",
+    "LOAD GAME": "📂",
+    "UNDO": "\u21a9",
+    "REDO": "\u21aa",
+    "PAUSE": "\u23f8",
+    "SOLVE": "\u2315",
 }
+SOLVE_ALGO_ORDER = ("BFS", "IDS", "UCS", "A*")
+
+# Menu colours — matching the cream footer bar (Win32 style)
+MENU_BG = (237, 233, 224, 252)
+MENU_BORDER = (160, 160, 160)
+MENU_TEXT_COLOR = (0, 0, 0)
+MENU_TEXT_HOVER = (0, 0, 0)
+MENU_HOVER_FACE = (198, 214, 235)  # soft blue highlight (Win32 menu hover)
+MENU_ARROW = "\u25c4"
 
 # Color palette — classic Windows FreeCell-style green felt
 COLOR_BG = (0, 128, 0)  # #008000
@@ -103,10 +111,7 @@ COLOR_FELT_SLOT_FACE = (0, 106, 0)
 COLOR_FELT_BEVEL_SHADOW = (0, 70, 0)
 COLOR_FELT_BEVEL_HIGHLIGHT = (0, 172, 0)
 COLOR_SLOT_TARGET_RING = (255, 228, 100)
-# Floating toolbar tuned for green table
-FAB_PANEL_FILL = (12, 48, 18, 236)
-FAB_PANEL_LINE = (120, 205, 130, 200)
-FAB_SHADOW_ALPHA = 42
+
 COLOR_CARD_FACE = (245, 244, 238)
 COLOR_CARD_BORDER = (60, 60, 60)
 COLOR_CARD_RED = (183, 32, 32)

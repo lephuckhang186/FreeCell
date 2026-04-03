@@ -49,4 +49,3 @@ class Card:
     @property
     def label(self) -> str:
         return f"{RANK_LABELS[self.rank]}{SUIT_SYMBOLS[self.suit]}"
-

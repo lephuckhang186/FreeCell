@@ -57,7 +57,9 @@ class BoardLayout:
 
     def card_rect_in_tableau(self, col: int, row: int) -> pygame.Rect:
         base = self.tableau[col]
-        return pygame.Rect(base.x, base.y + row * TABLEAU_GAP_Y, CARD_WIDTH, CARD_HEIGHT)
+        return pygame.Rect(
+            base.x, base.y + row * TABLEAU_GAP_Y, CARD_WIDTH, CARD_HEIGHT
+        )
 
     def tableau_cards_pick_rect(self, col: int, column_size: int) -> pygame.Rect | None:
         """Strict hit area for grabbing tableau cards (no bleed into foundation / empty space below)."""
@@ -86,7 +88,9 @@ class BoardLayout:
                 return PileRef(PileType.TABLEAU, i)
         return None
 
-    def tableau_pick_index(self, col: int, pos: tuple[int, int], column_size: int) -> int:
+    def tableau_pick_index(
+        self, col: int, pos: tuple[int, int], column_size: int
+    ) -> int:
         if column_size <= 0:
             return -1
         py = pos[1]
@@ -103,4 +107,3 @@ class BoardLayout:
         rel_y = py - base.y
         idx = rel_y // TABLEAU_GAP_Y
         return max(0, min(column_size - 1, idx))
-

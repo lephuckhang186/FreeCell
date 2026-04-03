@@ -61,7 +61,12 @@ def card_str(x):
 def init_tableau():
     # Bắt đầu từ trạng thái Hoàn hảo (Perfect Cascades)
     sequences = []
-    suits_cycle = [3, 2, 1, 0]  # S, H, D, C
+    # Easy (1-3): dùng xen kẽ màu hoàn hảo (black-red-black-red)
+    # Medium/Hard (4-10): dùng cycle có 2 suit cùng màu liền kề
+    if LEVEL <= 3:
+        suits_cycle = [3, 2, 0, 1]  # S(b), H(r), C(b), D(r)
+    else:
+        suits_cycle = [3, 2, 1, 0]  # S(b), H(r), D(r), C(b)
     for i in range(4):
         seq = []
         for r in range(12, -1, -1):
