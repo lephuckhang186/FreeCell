@@ -32,7 +32,13 @@ from .constants import (
     TITLE,
 )
 from .layout import BoardLayout
-from .rules import PileRef, PileType, apply_move, tableau_descending_alternating, validate_move
+from .rules import (
+    PileRef,
+    PileType,
+    apply_move,
+    tableau_descending_alternating,
+    validate_move,
+)
 from .models import Card, Suit
 from .state import GameState, get_card_from_str, load_game_from_testcase_file
 from .ui import Renderer, menu_button_rect, dropup_layout, submenu_layout, sub2_layout
@@ -90,7 +96,9 @@ class FreeCellGame:
         self.renderer = Renderer(self.screen)
 
         self.active_deal_label: str = ""
-        self.state: GameState = self._build_generated_state(DEFAULT_NEW_GAME_DIFFICULTY, DEFAULT_NEW_GAME_LEVEL)
+        self.state: GameState = self._build_generated_state(
+            DEFAULT_NEW_GAME_DIFFICULTY, DEFAULT_NEW_GAME_LEVEL
+        )
         self._retry_category: str = DEFAULT_NEW_GAME_DIFFICULTY
         self._retry_level: int = DEFAULT_NEW_GAME_LEVEL
         self._retry_state: GameState = self.state.clone()
@@ -155,18 +163,24 @@ class FreeCellGame:
         def _bridge(parent: "pygame.Rect", sub_outer: "pygame.Rect") -> "pygame.Rect":
             top = min(parent.top, sub_outer.top)
             bot = max(parent.bottom, sub_outer.bottom)
-            return pygame.Rect(sub_outer.right, top, parent.left - sub_outer.right + 4, bot - top)
+            return pygame.Rect(
+                sub_outer.right, top, parent.left - sub_outer.right + 4, bot - top
+            )
 
         # 1. Check sub2 (level numbers) — deepest first
         if self.menu_hover == "NEW GAME" and self.submenu_hover:
             cat = self.submenu_hover
             if cat in NEW_GAME_LEVEL_RANGES:
                 parent = drop_rects["NEW GAME"]
-                _, sub_rects = submenu_layout(parent, ["easy", "medium", "hard"], screen_h=sh)
+                _, sub_rects = submenu_layout(
+                    parent, ["easy", "medium", "hard"], screen_h=sh
+                )
                 if cat in sub_rects:
                     lo, hi = NEW_GAME_LEVEL_RANGES[cat]
                     levels = [str(l) for l in range(lo, hi + 1)]
-                    s2_outer, s2_rects = sub2_layout(sub_rects[cat], levels, screen_h=sh)
+                    s2_outer, s2_rects = sub2_layout(
+                        sub_rects[cat], levels, screen_h=sh
+                    )
                     for key in levels:
                         if s2_rects[key].collidepoint(pos):
                             found_sub2 = key
@@ -289,7 +303,7 @@ class FreeCellGame:
             parent=root,
             initialdir=testcase_dir if os.path.exists(testcase_dir) else base_dir,
             title="Load Game",
-            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
         )
         root.destroy()
 
@@ -298,7 +312,7 @@ class FreeCellGame:
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = [line.strip() for line in f.readlines()]
                 new_state = _parse_testcase_lines(lines)
-                
+
                 self.undo_stack.clear()
                 self.redo_stack.clear()
                 self.solution_moves.clear()
@@ -309,7 +323,7 @@ class FreeCellGame:
                     self._solver_cancel_event.set()
                 self._solver_thread = None
                 self.solver_game_over = False
-                
+
                 self.state = new_state
                 self.moves = 0
                 self.score = 0
@@ -335,17 +349,23 @@ class FreeCellGame:
         self.status_text = message
         self.status_until = time() + seconds
 
-
     def _build_generated_state(self, category: str, level: int) -> GameState:
         """Generate a fresh deal using freecell/generate_test.py at a specific LEVEL."""
         generate_test.LEVEL = level
-        generate_test.MOVES, generate_test.BLOCK_DEPTH, generate_test.MIN_SEQ, generate_test.NOISE = generate_test.LEVEL_CONFIG[level]
+        (
+            generate_test.MOVES,
+            generate_test.BLOCK_DEPTH,
+            generate_test.MIN_SEQ,
+            generate_test.NOISE,
+        ) = generate_test.LEVEL_CONFIG[level]
         nums_tableau, _ = generate_test.generate()
         state = GameState()
         for col_idx, col in enumerate(nums_tableau):
             if col_idx >= len(state.tableau):
                 break
-            state.tableau[col_idx] = [get_card_from_str(generate_test.card_str(n)) for n in col]
+            state.tableau[col_idx] = [
+                get_card_from_str(generate_test.card_str(n)) for n in col
+            ]
         self.active_deal_label = f"gen:{category} (L{level})"
         return state
 
@@ -404,8 +424,6 @@ class FreeCellGame:
         self.paused = False
         self._close_menu()
 
-
-
     def add_score(self, delta: int) -> None:
         """Add delta to score, clamped to >= 0."""
         self.score = max(0, self.score + delta)
@@ -442,9 +460,7 @@ class FreeCellGame:
         # Deepcopy state passing to background thread to avoid conflict with main thread
         state_copy = deepcopy(self.state)
         self._solver_thread = threading.Thread(
-            target=self._run_solver_task,
-            args=(label, state_copy),
-            daemon=True
+            target=self._run_solver_task, args=(label, state_copy), daemon=True
         )
         self._solver_thread.start()
 
@@ -477,7 +493,7 @@ class FreeCellGame:
         self.redo_stack.append(deepcopy(self.state))
         self.state = self.undo_stack.pop()
         self.moves += 1
-        self.add_score(-5)   # penalty for undo
+        self.add_score(-5)  # penalty for undo
         self.start_state_transition_animation(old_state, self.state)
         self.drag = None
         self.drop_anim = None
@@ -523,20 +539,30 @@ class FreeCellGame:
 
         return out
 
-    def start_state_transition_animation(self, from_state: GameState, to_state: GameState, duration: float = 0.16) -> None:
+    def start_state_transition_animation(
+        self, from_state: GameState, to_state: GameState, duration: float = 0.16
+    ) -> None:
         """Animate cards between two board states (used for undo/redo)."""
         self.transition_anims.clear()
         from_pos = self.card_positions(from_state)
         to_pos = self.card_positions(to_state)
-        moved_cards = [card for card in from_pos if card in to_pos and from_pos[card] != to_pos[card]]
+        moved_cards = [
+            card
+            for card in from_pos
+            if card in to_pos and from_pos[card] != to_pos[card]
+        ]
         for card in moved_cards:
             sx, sy = from_pos[card]
             ex, ey = to_pos[card]
             self.transition_anims.append(
-                CardAnimation(card=card, tween=Tween(sx, sy, ex, ey, duration), x=sx, y=sy)
+                CardAnimation(
+                    card=card, tween=Tween(sx, sy, ex, ey, duration), x=sx, y=sy
+                )
             )
 
-    def source_at_pos(self, pos: tuple[int, int], top_only_tableau: bool = False) -> tuple[PileRef, int] | None:
+    def source_at_pos(
+        self, pos: tuple[int, int], top_only_tableau: bool = False
+    ) -> tuple[PileRef, int] | None:
         for i, rect in enumerate(self.layout.free_cells):
             if rect.collidepoint(pos) and self.state.free_cells[i] is not None:
                 return PileRef(PileType.FREECELL, i), -1
@@ -618,12 +644,18 @@ class FreeCellGame:
             )
             return
 
-    def start_drop_animation(self, cards: list, dst: PileRef, start_x: float, start_y: float) -> None:
+    def start_drop_animation(
+        self, cards: list, dst: PileRef, start_x: float, start_y: float
+    ) -> None:
         end_x, end_y = self.card_position_for_destination(dst, len(cards))
         tween = Tween(start_x, start_y, end_x, end_y, DROP_ANIM_DURATION)
-        self.drop_anim = DropAnimation(cards=cards, tween=tween, dst=dst, count=len(cards), x=start_x, y=start_y)
+        self.drop_anim = DropAnimation(
+            cards=cards, tween=tween, dst=dst, count=len(cards), x=start_x, y=start_y
+        )
 
-    def card_position_for_destination(self, dst: PileRef, count: int) -> tuple[float, float]:
+    def card_position_for_destination(
+        self, dst: PileRef, count: int
+    ) -> tuple[float, float]:
         if dst.kind == PileType.FREECELL:
             rect = self.layout.free_cells[dst.index]
             return float(rect.x), float(rect.y)
@@ -635,7 +667,9 @@ class FreeCellGame:
         rect = self.layout.card_rect_in_tableau(dst.index, row)
         return float(rect.x), float(rect.y)
 
-    def card_source_position(self, src: PileRef, start_index: int = -1) -> tuple[float, float]:
+    def card_source_position(
+        self, src: PileRef, start_index: int = -1
+    ) -> tuple[float, float]:
         if src.kind == PileType.FREECELL:
             rect = self.layout.free_cells[src.index]
             return float(rect.x), float(rect.y)
@@ -684,7 +718,9 @@ class FreeCellGame:
         return False
 
     def try_auto_move_from_source(self, src: PileRef, start_index: int) -> bool:
-        cards = [self.state.tableau[src.index][-1]] if src.kind == PileType.TABLEAU else []
+        cards = (
+            [self.state.tableau[src.index][-1]] if src.kind == PileType.TABLEAU else []
+        )
         if src.kind == PileType.FREECELL:
             card = self.state.free_cells[src.index]
             cards = [card] if card else []
@@ -718,7 +754,11 @@ class FreeCellGame:
                         return True
 
             # 3) If not placeable anywhere below, move only to another empty nearby free cell.
-            candidates = [i for i, c in enumerate(self.state.free_cells) if c is None and i != src.index]
+            candidates = [
+                i
+                for i, c in enumerate(self.state.free_cells)
+                if c is None and i != src.index
+            ]
             if candidates:
                 candidates.sort(key=lambda idx: abs(idx - src.index))
                 dst = PileRef(PileType.FREECELL, candidates[0])
@@ -732,7 +772,9 @@ class FreeCellGame:
             return False
 
         # 4) For double-click from tableau with no legal target, park into empty free cell.
-        empty_free = next((i for i, c in enumerate(self.state.free_cells) if c is None), None)
+        empty_free = next(
+            (i for i, c in enumerate(self.state.free_cells) if c is None), None
+        )
         if empty_free is not None:
             dst = PileRef(PileType.FREECELL, empty_free)
             if validate_move(self.state, src, dst, cards).ok:
@@ -777,13 +819,19 @@ class FreeCellGame:
             cards = self.drag.cards
             src = self.drag.src
             for i in range(4):
-                if validate_move(self.state, src, PileRef(PileType.FREECELL, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.FREECELL, i), cards
+                ).ok:
                     targets.add(("freecell", i))
             for i in range(4):
-                if validate_move(self.state, src, PileRef(PileType.FOUNDATION, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.FOUNDATION, i), cards
+                ).ok:
                     targets.add(("foundation", i))
             for i in range(8):
-                if validate_move(self.state, src, PileRef(PileType.TABLEAU, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.TABLEAU, i), cards
+                ).ok:
                     targets.add(("tableau", i))
         return targets
 
@@ -838,8 +886,12 @@ class FreeCellGame:
             mx, my = pygame.mouse.get_pos()
             self.drag.target_x = mx - self.drag.offset_x
             self.drag.target_y = my - self.drag.offset_y
-            self.drag.smooth_x += (self.drag.target_x - self.drag.smooth_x) * DRAG_SMOOTH_FACTOR
-            self.drag.smooth_y += (self.drag.target_y - self.drag.smooth_y) * DRAG_SMOOTH_FACTOR
+            self.drag.smooth_x += (
+                self.drag.target_x - self.drag.smooth_x
+            ) * DRAG_SMOOTH_FACTOR
+            self.drag.smooth_y += (
+                self.drag.target_y - self.drag.smooth_y
+            ) * DRAG_SMOOTH_FACTOR
         if self.drop_anim:
             x, y, done = self.drop_anim.tween.step(dt)
             self.drop_anim.x = x
@@ -861,7 +913,9 @@ class FreeCellGame:
 
     def draw(self) -> None:
         self.renderer.draw_background()
-        self.renderer.draw_static_board(self.layout, self.state, highlight_targets=self.collect_highlight_targets())
+        self.renderer.draw_static_board(
+            self.layout, self.state, highlight_targets=self.collect_highlight_targets()
+        )
 
         hidden_tableau = None
         hidden_freecell = None
@@ -876,7 +930,10 @@ class FreeCellGame:
 
         if self.drop_anim:
             if self.drop_anim.dst.kind == PileType.TABLEAU:
-                hidden_from = len(self.state.tableau[self.drop_anim.dst.index]) - self.drop_anim.count
+                hidden_from = (
+                    len(self.state.tableau[self.drop_anim.dst.index])
+                    - self.drop_anim.count
+                )
                 hidden_tableau = (self.drop_anim.dst.index, hidden_from)
             elif self.drop_anim.dst.kind == PileType.FREECELL:
                 hidden_freecell = self.drop_anim.dst.index
@@ -946,15 +1003,17 @@ class FreeCellGame:
                     f"Search Time: {stats.get('search_time', 0):.4f}s",
                     f"Expanded Nodes: {stats.get('expanded_nodes', 0)}",
                     f"Search Length: {stats.get('search_length', 0)} moves",
-                    f"Memory Usage: {stats.get('memory_usage_bytes', 0)} bytes"
+                    f"Memory Usage: {stats.get('memory_usage_bytes', 0)} bytes",
                 ]
-                if 'depth_reached' in stats:
+                if "depth_reached" in stats:
                     lines.append(f"Depth Reached: {stats['depth_reached']}")
                 sy = self.screen.get_height() // 2 + 60
                 for line in lines:
                     text_surface = font.render(line, True, (255, 255, 255))
                     tw = text_surface.get_width()
-                    self.screen.blit(text_surface, (self.screen.get_width() // 2 - tw // 2, sy))
+                    self.screen.blit(
+                        text_surface, (self.screen.get_width() // 2 - tw // 2, sy)
+                    )
                     sy += 36
         elif self.paused:
             self.renderer.draw_pause_overlay()
@@ -971,15 +1030,21 @@ class FreeCellGame:
                 parent = drop_rects["NEW GAME"]
                 sub_outer, sub_rects = submenu_layout(parent, cats, screen_h=sh)
                 items = [(c, c.title()) for c in cats]
-                self.renderer.draw_submenu(sub_outer, items, sub_rects, self.submenu_hover, has_sub=True)
+                self.renderer.draw_submenu(
+                    sub_outer, items, sub_rects, self.submenu_hover, has_sub=True
+                )
 
                 # Sub-submenu: level numbers
                 if self.submenu_hover and self.submenu_hover in NEW_GAME_LEVEL_RANGES:
                     lo, hi = NEW_GAME_LEVEL_RANGES[self.submenu_hover]
                     levels = [str(lvl) for lvl in range(lo, hi + 1)]
-                    s2_outer, s2_rects = sub2_layout(sub_rects[self.submenu_hover], levels, screen_h=sh)
+                    s2_outer, s2_rects = sub2_layout(
+                        sub_rects[self.submenu_hover], levels, screen_h=sh
+                    )
                     s2_items = [(lvl, lvl) for lvl in levels]
-                    self.renderer.draw_submenu(s2_outer, s2_items, s2_rects, self.sub2_hover)
+                    self.renderer.draw_submenu(
+                        s2_outer, s2_items, s2_rects, self.sub2_hover
+                    )
 
             # Submenu for SOLVE → algorithms
             elif self.menu_hover == "SOLVE":
@@ -988,7 +1053,10 @@ class FreeCellGame:
                 sub_outer, sub_rects = submenu_layout(parent, algos, screen_h=sh)
                 items = [(a, a) for a in algos]
                 self.renderer.draw_submenu(
-                    sub_outer, items, sub_rects, self.submenu_hover,
+                    sub_outer,
+                    items,
+                    sub_rects,
+                    self.submenu_hover,
                     accent_map=SOLVER_BTN_ACCENTS,
                 )
 
@@ -1019,7 +1087,9 @@ class FreeCellGame:
                     elif not self.paused and event.key == pygame.K_y:
                         self.redo()
                 elif event.type == pygame.VIDEORESIZE:
-                    self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                    self.screen = pygame.display.set_mode(
+                        (event.w, event.h), pygame.RESIZABLE
+                    )
                     self.layout.resize(self.screen.get_size())
                 elif event.type == pygame.MOUSEMOTION:
                     self._update_menu_hover(event.pos)
@@ -1042,7 +1112,10 @@ class FreeCellGame:
                     # Double-click detection
                     is_double = bool(getattr(event, "clicks", 0) >= 2)
                     now = time()
-                    if not is_double and now - self.last_click_at <= DOUBLE_CLICK_SECONDS:
+                    if (
+                        not is_double
+                        and now - self.last_click_at <= DOUBLE_CLICK_SECONDS
+                    ):
                         is_double = True
                     self.last_click_at = now
                     if is_double and not self.drop_anim:
@@ -1064,7 +1137,9 @@ class FreeCellGame:
                         dx = abs(event.pos[0] - self.mouse_down_pos[0])
                         dy = abs(event.pos[1] - self.mouse_down_pos[1])
                         if dx <= 4 and dy <= 4 and len(self.drag.cards) == 1:
-                            if self.try_auto_move_from_source(self.drag.src, self.drag.start_index):
+                            if self.try_auto_move_from_source(
+                                self.drag.src, self.drag.start_index
+                            ):
                                 self.drag = None
                                 self.mouse_down_pos = None
                                 continue
@@ -1079,4 +1154,3 @@ class FreeCellGame:
 
 def run() -> None:
     FreeCellGame().run()
-

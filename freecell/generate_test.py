@@ -2,9 +2,7 @@ import random
 import os
 import re
 
-# =========================
 # CONFIG
-# =========================
 LEVEL_CONFIG = {
     # Difficulty tuning for Easy/Medium/Hard tiers:
     # - MOVES: Shuffle count.
@@ -25,10 +23,8 @@ LEVEL_CONFIG = {
 LEVEL = 5  # Default
 MOVES, BLOCK_DEPTH, MIN_SEQ, NOISE = LEVEL_CONFIG[LEVEL]
 
-# =========================
-# CARD UTILS
-# =========================
 
+# CARD UTILS
 def suit(x):
     return x // 13
 
@@ -55,9 +51,7 @@ def card_str(x):
     return ranks[rank(x)] + suits[suit(x)]
 
 
-# =========================
 # INIT
-# =========================
 def init_tableau():
     # Begin with a solvable "perfect" state to ensure validity after shuffling.
     sequences = []
@@ -81,9 +75,7 @@ def init_tableau():
     return tableau
 
 
-# =========================
 # SCORE CONTROLLERS
-# =========================
 def seq_score(tableau):
     good, total = 0, 0
     for col in tableau:
@@ -137,9 +129,7 @@ def balance_ok(tableau):
     return True
 
 
-# =========================
 # GENERATE
-# =========================
 def generate():
     attempts = 0
     while True:
@@ -169,9 +159,7 @@ def generate():
             return tableau, attempts
 
 
-# =========================
 # FILE HANDLER
-# =========================
 def get_next_filename():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     if LEVEL <= 3:
@@ -210,9 +198,7 @@ def write_file(tableau, filename):
             f.write(" ".join(card_str(x) for x in col) + "\n")
 
 
-# =========================
 # MAIN
-# =========================
 if __name__ == "__main__":
     while True:
         try:
@@ -231,7 +217,7 @@ if __name__ == "__main__":
     board, attempts = generate()
     filename = get_next_filename()
     write_file(board, filename)
-    print(f"✅ Generated: {filename} (after {attempts} attempts)")
+    print(f"Generated: {filename} (after {attempts} attempts)")
     print(
         f"   MOVES: {MOVES} | NOISE: {NOISE} | TARGET SEQ: {MIN_SEQ} | BLOCK LIMIT: {BLOCK_DEPTH}"
     )
