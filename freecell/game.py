@@ -1,4 +1,7 @@
-"""Main pygame loop and player interaction."""
+"""
+FreeCell Application Entry Point.
+This module defines the main game loop, event handling, and UI orchestration.
+"""
 
 from __future__ import annotations
 
@@ -11,21 +14,36 @@ import pygame
 
 from .animation import Tween
 from .constants import (
+    DEFAULT_NEW_GAME_DIFFICULTY,
+    DEFAULT_NEW_GAME_LEVEL,
     DOUBLE_CLICK_SECONDS,
     DRAG_SMOOTH_FACTOR,
     DROP_ANIM_DURATION,
+    FOOTER_HEIGHT,
     FPS,
+    MENU_ITEMS,
+    MENU_ITEMS_WITH_SUBMENU,
+    NEW_GAME_LEVEL_RANGES,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SOLVE_ALGO_ORDER,
     SOLVER_AUTOSOLVE_TIMEOUT_S,
+    SOLVER_BTN_ACCENTS,
     TITLE,
 )
 from .layout import BoardLayout
-from .rules import PileRef, PileType, apply_move, tableau_descending_alternating, validate_move
+from .rules import (
+    PileRef,
+    PileType,
+    apply_move,
+    tableau_descending_alternating,
+    validate_move,
+)
 from .models import Card, Suit
-from .state import GameState, deal_new_game, generate_state_testcase
-from .ui import Renderer
+from .state import GameState, get_card_from_str, load_game_from_testcase_file
+from .ui import Renderer, menu_button_rect, dropup_layout, submenu_layout, sub2_layout
 from .algorithm import FreeCellSolver
+from . import generate_test
 
 
 @dataclass(slots=True)
@@ -60,8 +78,6 @@ class CardAnimation:
 
 
 class FreeCellGame:
-    DEFAULT_TESTCASE_NUM = 4
-
     def _compute_window_size(self) -> tuple[int, int]:
         """Pick a windowed size that always fits desktop bounds."""
         desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
@@ -74,13 +90,18 @@ class FreeCellGame:
         pygame.init()
         pygame.display.set_caption(TITLE)
         width, height = self._compute_window_size()
-        # Standard framed window (not fullscreen / not borderless).
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
         self.layout = BoardLayout(self.screen.get_size())
         self.renderer = Renderer(self.screen)
 
-        self.state: GameState = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
+        self.active_deal_label: str = ""
+        self.state: GameState = self._build_generated_state(
+            DEFAULT_NEW_GAME_DIFFICULTY, DEFAULT_NEW_GAME_LEVEL
+        )
+        self._retry_category: str = DEFAULT_NEW_GAME_DIFFICULTY
+        self._retry_level: int = DEFAULT_NEW_GAME_LEVEL
+        self._retry_state: GameState = self.state.clone()
         self.undo_stack: list[GameState] = []
         self.redo_stack: list[GameState] = []
         self.drag: DragState | None = None
@@ -101,20 +122,260 @@ class FreeCellGame:
         self.auto_foundation_active = False
         self.solution_moves: list = []
         # UI state
-        self.game_id: int = 2  # endgame demo (BFS ~4 moves)
         self.score: int = 0
         self.elapsed: float = 0.0
         self.moves: int = 0
-        self.pressed_button_label: str = ""
-        self.pressed_button_until: float = 0.0
+        self.paused: bool = False
+        # Bottom-right menu
+        self.menu_open: bool = False
+        self.menu_btn_hover: bool = False
+        self.menu_hover: str | None = None
+        self.submenu_hover: str | None = None
+        self.sub2_hover: str | None = None
+
+    # ── Menu helpers ──────────────────────────────────────────────────────
+
+    def _close_menu(self) -> None:
+        self.menu_open = False
+        self.menu_hover = None
+        self.submenu_hover = None
+        self.sub2_hover = None
+
+    def _update_menu_hover(self, pos: tuple[int, int]) -> None:
+        """Track hover across menu button, dropup, and cascading submenus.
+
+        Uses "bridge" rectangles in the gap between a parent item and its
+        flyout submenu so the user can move the cursor leftward without
+        the submenu vanishing.
+        """
+        sw, sh = self.screen.get_size()
+        self.menu_btn_hover = menu_button_rect(sw, sh).collidepoint(pos)
+
+        if not self.menu_open:
+            return
+
+        drop_outer, drop_rects = dropup_layout(sw, sh)
+        found_main: str | None = None
+        found_sub: str | None = None
+        found_sub2: str | None = None
+
+        # Helper: build a bridge rect between a parent item and its submenu outer
+        def _bridge(parent: "pygame.Rect", sub_outer: "pygame.Rect") -> "pygame.Rect":
+            top = min(parent.top, sub_outer.top)
+            bot = max(parent.bottom, sub_outer.bottom)
+            return pygame.Rect(
+                sub_outer.right, top, parent.left - sub_outer.right + 4, bot - top
+            )
+
+        # 1. Check sub2 (level numbers) — deepest first
+        if self.menu_hover == "NEW GAME" and self.submenu_hover:
+            cat = self.submenu_hover
+            if cat in NEW_GAME_LEVEL_RANGES:
+                parent = drop_rects["NEW GAME"]
+                _, sub_rects = submenu_layout(
+                    parent, ["easy", "medium", "hard"], screen_h=sh
+                )
+                if cat in sub_rects:
+                    lo, hi = NEW_GAME_LEVEL_RANGES[cat]
+                    levels = [str(l) for l in range(lo, hi + 1)]
+                    s2_outer, s2_rects = sub2_layout(
+                        sub_rects[cat], levels, screen_h=sh
+                    )
+                    for key in levels:
+                        if s2_rects[key].collidepoint(pos):
+                            found_sub2 = key
+                            found_sub = cat
+                            found_main = "NEW GAME"
+                            break
+                    # Bridge between difficulty item and level flyout
+                    if found_main is None:
+                        bridge = _bridge(sub_rects[cat], s2_outer)
+                        if s2_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                            found_sub = cat
+                            found_main = "NEW GAME"
+
+        # 2. Check submenu
+        if found_main is None:
+            active = self.menu_hover
+            if active == "NEW GAME":
+                parent = drop_rects["NEW GAME"]
+                cats = ["easy", "medium", "hard"]
+                sub_outer, sub_rects = submenu_layout(parent, cats, screen_h=sh)
+                for key in cats:
+                    if sub_rects[key].collidepoint(pos):
+                        found_sub = key
+                        found_main = "NEW GAME"
+                        break
+                # Bridge between main item and difficulty flyout
+                if found_main is None:
+                    bridge = _bridge(parent, sub_outer)
+                    if sub_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                        found_main = "NEW GAME"
+            elif active == "SOLVE":
+                parent = drop_rects["SOLVE"]
+                algos = list(SOLVE_ALGO_ORDER)
+                sub_outer, sub_rects = submenu_layout(parent, algos, screen_h=sh)
+                for key in algos:
+                    if sub_rects[key].collidepoint(pos):
+                        found_sub = key
+                        found_main = "SOLVE"
+                        break
+                # Bridge between main item and algo flyout
+                if found_main is None:
+                    bridge = _bridge(parent, sub_outer)
+                    if sub_outer.collidepoint(pos) or bridge.collidepoint(pos):
+                        found_main = "SOLVE"
+
+        # 3. Check main dropup
+        if found_main is None:
+            for key in MENU_ITEMS:
+                if drop_rects[key].collidepoint(pos):
+                    found_main = key
+                    break
+
+        self.menu_hover = found_main
+        self.submenu_hover = found_sub
+        self.sub2_hover = found_sub2
+
+    def _handle_menu_click(self, pos: tuple[int, int]) -> bool:
+        """Handle a click when the menu is open.  Returns True = consumed."""
+        sw, sh = self.screen.get_size()
+
+        # Click on menu button → close
+        if menu_button_rect(sw, sh).collidepoint(pos):
+            self._close_menu()
+            return True
+
+        # Sub2 click: level number → new deal
+        if self.menu_hover == "NEW GAME" and self.submenu_hover and self.sub2_hover:
+            try:
+                lvl = int(self.sub2_hover)
+                self._apply_new_deal(self.submenu_hover, lvl)
+            except ValueError:
+                pass
+            self._close_menu()
+            return True
+
+        # Submenu click: algorithm → run solver
+        if self.menu_hover == "SOLVE" and self.submenu_hover:
+            algo = self.submenu_hover
+            if algo in SOLVE_ALGO_ORDER:
+                if self._solver_thread and self._solver_thread.is_alive():
+                    self.set_status("Solver dang chay! Vui long doi...", 2.0)
+                else:
+                    self.run_solver(algo)
+            self._close_menu()
+            return True
+
+        # Main item click
+        drop_outer, drop_rects = dropup_layout(sw, sh)
+        for key in MENU_ITEMS:
+            if drop_rects[key].collidepoint(pos):
+                if key in MENU_ITEMS_WITH_SUBMENU:
+                    return True  # do nothing, submenus open on hover
+                if key == "UNDO":
+                    self.undo()
+                elif key == "REDO":
+                    self.redo()
+                elif key == "LOAD GAME":
+                    self._close_menu()
+                    self._load_game_dialog()
+                    return True
+                elif key == "PAUSE":
+                    self.toggle_pause()
+                self._close_menu()
+                return True
+
+    def _load_game_dialog(self) -> None:
+        import tkinter as tk
+        from tkinter import filedialog
+        from .state import _parse_testcase_lines
+        import os
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        testcase_dir = os.path.join(base_dir, "testcase")
+
+        file_path = filedialog.askopenfilename(
+            parent=root,
+            initialdir=testcase_dir if os.path.exists(testcase_dir) else base_dir,
+            title="Load Game",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+        )
+        root.destroy()
+
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f.readlines()]
+                new_state = _parse_testcase_lines(lines)
+
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                self.solution_moves.clear()
+                self.solver_stats = None
+                self._solver_result = None
+                self.win_anim = None
+                if self._solver_thread:
+                    self._solver_cancel_event.set()
+                self._solver_thread = None
+                self.solver_game_over = False
+
+                self.state = new_state
+                self.moves = 0
+                self.score = 0
+                self.elapsed = 0.0
+                file_name = os.path.basename(file_path)
+                self.active_deal_label = f"Loaded: {file_name}"
+                self.set_status("Loaded successfully!", 3.0)
+            except Exception as e:
+                self.set_status(f"Load failed: {e}", 3.0)
+
+        # Click outside everything → close
+        self._close_menu()
+        return True
+
+    def toggle_pause(self) -> None:
+        if self.state.won or self.solver_game_over:
+            return
+        self.paused = not self.paused
+        if self.paused:
+            self.drag = None
 
     def set_status(self, message: str, seconds: float = 1.2) -> None:
         self.status_text = message
         self.status_until = time() + seconds
 
-    def new_game(self) -> None:
+    def _build_generated_state(self, category: str, level: int) -> GameState:
+        """Generate a fresh deal using freecell/generate_test.py at a specific LEVEL."""
+        generate_test.LEVEL = level
+        (
+            generate_test.MOVES,
+            generate_test.BLOCK_DEPTH,
+            generate_test.MIN_SEQ,
+            generate_test.NOISE,
+        ) = generate_test.LEVEL_CONFIG[level]
+        nums_tableau, _ = generate_test.generate()
+        state = GameState()
+        for col_idx, col in enumerate(nums_tableau):
+            if col_idx >= len(state.tableau):
+                break
+            state.tableau[col_idx] = [
+                get_card_from_str(generate_test.card_str(n)) for n in col
+            ]
+        self.active_deal_label = f"gen:{category} (L{level})"
+        return state
+
+    def _apply_new_deal(self, category: str, level: int) -> None:
         self._solver_cancel_event.set()
-        self.state = generate_state_testcase(self.DEFAULT_TESTCASE_NUM)
+        self.state = self._build_generated_state(category, level)
+        # Save snapshot for retry.
+        self._retry_category = category
+        self._retry_level = level
+        self._retry_state = self.state.clone()
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.drag = None
@@ -133,61 +394,39 @@ class FreeCellGame:
         self.score = 0
         self.elapsed = 0.0
         self.moves = 0
-        self.pressed_button_label = ""
-        self.pressed_button_until = 0.0
+        self.paused = False
+        self._close_menu()
+
+    def retry_current_deal(self) -> None:
+        """Restore the last generated board (created by the most recent New game / level pick)."""
+        self._solver_cancel_event.set()
+        if self._retry_state is None:
+            return
+        self.state = self._retry_state.clone()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.drag = None
+        self.drop_anim = None
+        self.status_text = ""
+        self.status_until = 0.0
+        self.solver_stats = None
+        self._solver_thread = None
+        self._solver_result = None
+        self._solver_started_at = 0.0
+        self._solver_timed_out = False
+        self.solver_game_over = False
+        self.auto_foundation_active = False
+        self.transition_anims.clear()
+        self.solution_moves = []
+        self.score = 0
+        self.elapsed = 0.0
+        self.moves = 0
+        self.paused = False
+        self._close_menu()
 
     def add_score(self, delta: int) -> None:
         """Add delta to score, clamped to >= 0."""
         self.score = max(0, self.score + delta)
-
-    def action_buttons(self) -> list[tuple[str, pygame.Rect]]:
-        """Top right toolbar: Main buttons and Algo buttons below them."""
-        W = self.screen.get_width()
-        btn_h = 36
-        gap = 12
-
-        # Main buttons group
-        main_specs = [("NEW GAME", 150), ("UNDO", 110), ("HINT", 110), ("MENU", 100)]
-        total_main_w = sum(w for _, w in main_specs) + gap * (len(main_specs) - 1)
-        start_x = W - total_main_w - 24
-        y_main = 24
-
-        out: list[tuple[str, pygame.Rect]] = []
-        x = start_x
-        for label, w in main_specs:
-            out.append((label, pygame.Rect(x, y_main, w, btn_h)))
-            x += w + gap
-
-        # Algo buttons aligned exactly under main buttons
-        algo_specs = [("IDS", 117), ("BFS", 118), ("UCS", 118), ("A*", 117)]
-        y_algo = y_main + btn_h + 12
-
-        x = start_x
-        for label, w in algo_specs:
-            out.append((label, pygame.Rect(x, y_algo, w, btn_h)))
-            x += w + gap
-
-        return out
-
-    def handle_button_click(self, pos: tuple[int, int]) -> bool:
-        for label, rect in self.action_buttons():
-            if not rect.collidepoint(pos):
-                continue
-            self.pressed_button_label = label
-            self.pressed_button_until = time() + 0.12
-            if label == "NEW GAME":
-                self.new_game()
-            elif label == "UNDO":
-                self.undo()
-            elif label in ("IDS", "BFS", "UCS", "A*"):
-                if self._solver_thread and self._solver_thread.is_alive():
-                    self.set_status("Solver dang chay! Vui long doi...", 2.0)
-                else:
-                    self.run_solver(label)
-            elif label in ("Hint", "More"):
-                pass  # chưa có chức năng
-            return True
-        return False
 
     def _run_solver_task(self, label: str, state_copy: GameState) -> None:
         solver = FreeCellSolver(state_copy, self._solver_cancel_event)
@@ -210,7 +449,7 @@ class FreeCellGame:
             self.set_status("Solver dang chay, vui long doi!", 2.0)
             return
 
-        self.set_status(f"Dang giai bang {label}... Vui long doi...", 100.0)
+        self.set_status(f"Solving with {label}! Please wait...", 100.0)
         self._solver_result = None
         self._solver_label = label
         self._solver_started_at = time()
@@ -221,9 +460,7 @@ class FreeCellGame:
         # Deepcopy state passing to background thread to avoid conflict with main thread
         state_copy = deepcopy(self.state)
         self._solver_thread = threading.Thread(
-            target=self._run_solver_task,
-            args=(label, state_copy),
-            daemon=True
+            target=self._run_solver_task, args=(label, state_copy), daemon=True
         )
         self._solver_thread.start()
 
@@ -256,7 +493,7 @@ class FreeCellGame:
         self.redo_stack.append(deepcopy(self.state))
         self.state = self.undo_stack.pop()
         self.moves += 1
-        self.add_score(-5)   # penalty for undo
+        self.add_score(-5)  # penalty for undo
         self.start_state_transition_animation(old_state, self.state)
         self.drag = None
         self.drop_anim = None
@@ -302,36 +539,44 @@ class FreeCellGame:
 
         return out
 
-    def start_state_transition_animation(self, from_state: GameState, to_state: GameState, duration: float = 0.16) -> None:
+    def start_state_transition_animation(
+        self, from_state: GameState, to_state: GameState, duration: float = 0.16
+    ) -> None:
         """Animate cards between two board states (used for undo/redo)."""
         self.transition_anims.clear()
         from_pos = self.card_positions(from_state)
         to_pos = self.card_positions(to_state)
-        moved_cards = [card for card in from_pos if card in to_pos and from_pos[card] != to_pos[card]]
+        moved_cards = [
+            card
+            for card in from_pos
+            if card in to_pos and from_pos[card] != to_pos[card]
+        ]
         for card in moved_cards:
             sx, sy = from_pos[card]
             ex, ey = to_pos[card]
             self.transition_anims.append(
-                CardAnimation(card=card, tween=Tween(sx, sy, ex, ey, duration), x=sx, y=sy)
+                CardAnimation(
+                    card=card, tween=Tween(sx, sy, ex, ey, duration), x=sx, y=sy
+                )
             )
 
-    def source_at_pos(self, pos: tuple[int, int], top_only_tableau: bool = False) -> tuple[PileRef, int] | None:
+    def source_at_pos(
+        self, pos: tuple[int, int], top_only_tableau: bool = False
+    ) -> tuple[PileRef, int] | None:
         for i, rect in enumerate(self.layout.free_cells):
             if rect.collidepoint(pos) and self.state.free_cells[i] is not None:
                 return PileRef(PileType.FREECELL, i), -1
 
-        for i, rect in enumerate(self.layout.foundations):
-            suit = list(self.state.foundations.keys())[i]
-            if rect.collidepoint(pos) and self.state.foundations[suit]:
-                return PileRef(PileType.FOUNDATION, i), -1
-
-        for col_idx, rect in enumerate(self.layout.tableau):
-            if not rect.inflate(0, 560).collidepoint(pos):
-                continue
+        for col_idx in range(len(self.layout.tableau)):
             col = self.state.tableau[col_idx]
             if not col:
                 continue
+            pick_r = self.layout.tableau_cards_pick_rect(col_idx, len(col))
+            if not pick_r or not pick_r.collidepoint(pos):
+                continue
             idx = self.layout.tableau_pick_index(col_idx, pos, len(col))
+            if idx < 0:
+                continue
             if top_only_tableau and idx != len(col) - 1:
                 return None
             return PileRef(PileType.TABLEAU, col_idx), idx
@@ -367,34 +612,18 @@ class FreeCellGame:
                 )
                 return
 
-        # Foundation slots
-        for i, rect in enumerate(self.layout.foundations):
-            suit = list(self.state.foundations.keys())[i]
-            pile = self.state.foundations[suit]
-            if rect.collidepoint(pos) and pile:
-                card = pile[-1]
-                self.drag = DragState(
-                    src=PileRef(PileType.FOUNDATION, i),
-                    start_index=-1,
-                    cards=[card],
-                    offset_x=pos[0] - rect.x,
-                    offset_y=pos[1] - rect.y,
-                    smooth_x=float(rect.x),
-                    smooth_y=float(rect.y),
-                    target_x=float(rect.x),
-                    target_y=float(rect.y),
-                )
-                return
-
         # Tableau columns.
-        for col_idx, rect in enumerate(self.layout.tableau):
-            if not rect.inflate(0, 560).collidepoint(pos):
-                continue
+        for col_idx in range(len(self.layout.tableau)):
             col = self.state.tableau[col_idx]
             if not col:
                 continue
+            pick_r = self.layout.tableau_cards_pick_rect(col_idx, len(col))
+            if not pick_r or not pick_r.collidepoint(pos):
+                continue
 
             start_idx = self.layout.tableau_pick_index(col_idx, pos, len(col))
+            if start_idx < 0:
+                continue
             candidate = col[start_idx:]
             # Only valid descending alternating sequence can be grabbed as a stack.
             if not tableau_descending_alternating(candidate):
@@ -415,12 +644,18 @@ class FreeCellGame:
             )
             return
 
-    def start_drop_animation(self, cards: list, dst: PileRef, start_x: float, start_y: float) -> None:
+    def start_drop_animation(
+        self, cards: list, dst: PileRef, start_x: float, start_y: float
+    ) -> None:
         end_x, end_y = self.card_position_for_destination(dst, len(cards))
         tween = Tween(start_x, start_y, end_x, end_y, DROP_ANIM_DURATION)
-        self.drop_anim = DropAnimation(cards=cards, tween=tween, dst=dst, count=len(cards), x=start_x, y=start_y)
+        self.drop_anim = DropAnimation(
+            cards=cards, tween=tween, dst=dst, count=len(cards), x=start_x, y=start_y
+        )
 
-    def card_position_for_destination(self, dst: PileRef, count: int) -> tuple[float, float]:
+    def card_position_for_destination(
+        self, dst: PileRef, count: int
+    ) -> tuple[float, float]:
         if dst.kind == PileType.FREECELL:
             rect = self.layout.free_cells[dst.index]
             return float(rect.x), float(rect.y)
@@ -432,7 +667,9 @@ class FreeCellGame:
         rect = self.layout.card_rect_in_tableau(dst.index, row)
         return float(rect.x), float(rect.y)
 
-    def card_source_position(self, src: PileRef, start_index: int = -1) -> tuple[float, float]:
+    def card_source_position(
+        self, src: PileRef, start_index: int = -1
+    ) -> tuple[float, float]:
         if src.kind == PileType.FREECELL:
             rect = self.layout.free_cells[src.index]
             return float(rect.x), float(rect.y)
@@ -481,14 +718,12 @@ class FreeCellGame:
         return False
 
     def try_auto_move_from_source(self, src: PileRef, start_index: int) -> bool:
-        cards = [self.state.tableau[src.index][-1]] if src.kind == PileType.TABLEAU else []
+        cards = (
+            [self.state.tableau[src.index][-1]] if src.kind == PileType.TABLEAU else []
+        )
         if src.kind == PileType.FREECELL:
             card = self.state.free_cells[src.index]
             cards = [card] if card else []
-        if src.kind == PileType.FOUNDATION:
-            suit = list(self.state.foundations.keys())[src.index]
-            pile = self.state.foundations[suit]
-            cards = [pile[-1]] if pile else []
         if not cards:
             return False
 
@@ -519,7 +754,11 @@ class FreeCellGame:
                         return True
 
             # 3) If not placeable anywhere below, move only to another empty nearby free cell.
-            candidates = [i for i, c in enumerate(self.state.free_cells) if c is None and i != src.index]
+            candidates = [
+                i
+                for i, c in enumerate(self.state.free_cells)
+                if c is None and i != src.index
+            ]
             if candidates:
                 candidates.sort(key=lambda idx: abs(idx - src.index))
                 dst = PileRef(PileType.FREECELL, candidates[0])
@@ -532,8 +771,10 @@ class FreeCellGame:
                     return True
             return False
 
-        # 4) For double-click from tableau/foundation with no legal target, park into empty free cell.
-        empty_free = next((i for i, c in enumerate(self.state.free_cells) if c is None), None)
+        # 4) For double-click from tableau with no legal target, park into empty free cell.
+        empty_free = next(
+            (i for i, c in enumerate(self.state.free_cells) if c is None), None
+        )
         if empty_free is not None:
             dst = PileRef(PileType.FREECELL, empty_free)
             if validate_move(self.state, src, dst, cards).ok:
@@ -578,19 +819,26 @@ class FreeCellGame:
             cards = self.drag.cards
             src = self.drag.src
             for i in range(4):
-                if validate_move(self.state, src, PileRef(PileType.FREECELL, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.FREECELL, i), cards
+                ).ok:
                     targets.add(("freecell", i))
             for i in range(4):
-                if validate_move(self.state, src, PileRef(PileType.FOUNDATION, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.FOUNDATION, i), cards
+                ).ok:
                     targets.add(("foundation", i))
             for i in range(8):
-                if validate_move(self.state, src, PileRef(PileType.TABLEAU, i), cards).ok:
+                if validate_move(
+                    self.state, src, PileRef(PileType.TABLEAU, i), cards
+                ).ok:
                     targets.add(("tableau", i))
         return targets
 
     def update(self, dt: float) -> None:
+        self._update_menu_hover(pygame.mouse.get_pos())
         # Advance game timer
-        if not self.state.won and not self.solver_game_over:
+        if not self.paused and not self.state.won and not self.solver_game_over:
             self.elapsed += dt
 
         # Background solver finished
@@ -603,7 +851,7 @@ class FreeCellGame:
                     self.solver_stats = stats
                     self.solution_moves = stats["path"].copy()
                     self.set_status(
-                        f"Giai xong voi {self._solver_label}! Dang choi thu...", 3.0
+                        f"Solved with {self._solver_label}! Playing...", 3.0
                     )
                 else:
                     self.set_status(
@@ -624,18 +872,26 @@ class FreeCellGame:
         ):
             self._apply_solver_timeout()
 
+        if self.paused:
+            return
+
         if self.solution_moves and not self.drop_anim and not self.transition_anims:
             move = self.solution_moves.pop(0)
             old_state = deepcopy(self.state)
             apply_move(self.state, move[0], move[1], move[2])
+            self.moves += 1
             self.start_state_transition_animation(old_state, self.state, duration=0.15)
 
         if self.drag:
             mx, my = pygame.mouse.get_pos()
             self.drag.target_x = mx - self.drag.offset_x
             self.drag.target_y = my - self.drag.offset_y
-            self.drag.smooth_x += (self.drag.target_x - self.drag.smooth_x) * DRAG_SMOOTH_FACTOR
-            self.drag.smooth_y += (self.drag.target_y - self.drag.smooth_y) * DRAG_SMOOTH_FACTOR
+            self.drag.smooth_x += (
+                self.drag.target_x - self.drag.smooth_x
+            ) * DRAG_SMOOTH_FACTOR
+            self.drag.smooth_y += (
+                self.drag.target_y - self.drag.smooth_y
+            ) * DRAG_SMOOTH_FACTOR
         if self.drop_anim:
             x, y, done = self.drop_anim.tween.step(dt)
             self.drop_anim.x = x
@@ -657,8 +913,9 @@ class FreeCellGame:
 
     def draw(self) -> None:
         self.renderer.draw_background()
-        self.renderer.draw_header(self.score, self.elapsed, self.moves)
-        self.renderer.draw_static_board(self.layout, self.state, highlight_targets=self.collect_highlight_targets())
+        self.renderer.draw_static_board(
+            self.layout, self.state, highlight_targets=self.collect_highlight_targets()
+        )
 
         hidden_tableau = None
         hidden_freecell = None
@@ -673,7 +930,10 @@ class FreeCellGame:
 
         if self.drop_anim:
             if self.drop_anim.dst.kind == PileType.TABLEAU:
-                hidden_from = len(self.state.tableau[self.drop_anim.dst.index]) - self.drop_anim.count
+                hidden_from = (
+                    len(self.state.tableau[self.drop_anim.dst.index])
+                    - self.drop_anim.count
+                )
                 hidden_tableau = (self.drop_anim.dst.index, hidden_from)
             elif self.drop_anim.dst.kind == PileType.FREECELL:
                 hidden_freecell = self.drop_anim.dst.index
@@ -709,6 +969,29 @@ class FreeCellGame:
             for anim in self.transition_anims:
                 self.renderer.draw_card(anim.card, anim.x, anim.y, shadow=True)
 
+        n_found = sum(len(p) for p in self.state.foundations.values())
+        n_fc = sum(1 for c in self.state.free_cells if c is not None)
+
+        deal_label_to_draw = self.active_deal_label
+        if self.status_text and time() <= self.status_until:
+            deal_label_to_draw = self.status_text
+
+        solver_anim_time = -1.0
+        if self._solver_thread and self._solver_thread.is_alive():
+            solver_anim_time = time() - self._solver_started_at
+
+        self.renderer.draw_footer_bar(
+            self.score,
+            self.elapsed,
+            self.moves,
+            n_found,
+            deal_label_to_draw,
+            n_fc,
+            menu_btn_hover=self.menu_btn_hover,
+            menu_is_open=self.menu_open,
+            solver_anim_time=solver_anim_time,
+        )
+
         if self.solver_game_over:
             self.renderer.draw_solver_timeout_game_over_overlay()
         elif self.state.won:
@@ -720,27 +1003,63 @@ class FreeCellGame:
                     f"Search Time: {stats.get('search_time', 0):.4f}s",
                     f"Expanded Nodes: {stats.get('expanded_nodes', 0)}",
                     f"Search Length: {stats.get('search_length', 0)} moves",
-                    f"Memory Usage: {stats.get('memory_usage_bytes', 0)} bytes"
+                    f"Memory Usage: {stats.get('memory_usage_bytes', 0)} bytes",
                 ]
-                if 'depth_reached' in stats:
+                if "depth_reached" in stats:
                     lines.append(f"Depth Reached: {stats['depth_reached']}")
-                
                 sy = self.screen.get_height() // 2 + 60
                 for line in lines:
                     text_surface = font.render(line, True, (255, 255, 255))
                     tw = text_surface.get_width()
-                    self.screen.blit(text_surface, (self.screen.get_width() // 2 - tw // 2, sy))
+                    self.screen.blit(
+                        text_surface, (self.screen.get_width() // 2 - tw // 2, sy)
+                    )
                     sy += 36
+        elif self.paused:
+            self.renderer.draw_pause_overlay()
 
-        if self.status_text and time() <= self.status_until:
-            font = pygame.font.SysFont("segoeui", 24, bold=True)
-            msg = font.render(self.status_text, True, (255, 216, 120))
-            self.screen.blit(msg, (24, self.screen.get_height() - 68))
+        # ── Cascading menu ──
+        if self.menu_open:
+            sw, sh = self.screen.get_size()
+            drop_outer, drop_rects = dropup_layout(sw, sh)
+            self.renderer.draw_dropup(drop_outer, drop_rects, self.menu_hover)
 
-        self.renderer.draw_action_buttons(
-            self.action_buttons(),
-            pressed=self.pressed_button_label if time() <= self.pressed_button_until else "",
-        )
+            # Submenu for NEW GAME → difficulty
+            if self.menu_hover == "NEW GAME":
+                cats = ["easy", "medium", "hard"]
+                parent = drop_rects["NEW GAME"]
+                sub_outer, sub_rects = submenu_layout(parent, cats, screen_h=sh)
+                items = [(c, c.title()) for c in cats]
+                self.renderer.draw_submenu(
+                    sub_outer, items, sub_rects, self.submenu_hover, has_sub=True
+                )
+
+                # Sub-submenu: level numbers
+                if self.submenu_hover and self.submenu_hover in NEW_GAME_LEVEL_RANGES:
+                    lo, hi = NEW_GAME_LEVEL_RANGES[self.submenu_hover]
+                    levels = [str(lvl) for lvl in range(lo, hi + 1)]
+                    s2_outer, s2_rects = sub2_layout(
+                        sub_rects[self.submenu_hover], levels, screen_h=sh
+                    )
+                    s2_items = [(lvl, lvl) for lvl in levels]
+                    self.renderer.draw_submenu(
+                        s2_outer, s2_items, s2_rects, self.sub2_hover
+                    )
+
+            # Submenu for SOLVE → algorithms
+            elif self.menu_hover == "SOLVE":
+                algos = list(SOLVE_ALGO_ORDER)
+                parent = drop_rects["SOLVE"]
+                sub_outer, sub_rects = submenu_layout(parent, algos, screen_h=sh)
+                items = [(a, a) for a in algos]
+                self.renderer.draw_submenu(
+                    sub_outer,
+                    items,
+                    sub_rects,
+                    self.submenu_hover,
+                    accent_map=SOLVER_BTN_ACCENTS,
+                )
+
         pygame.display.flip()
 
     def run(self) -> None:
@@ -752,45 +1071,75 @@ class FreeCellGame:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        running = False
+                        if self.menu_open:
+                            self._close_menu()
+                        else:
+                            running = False
                     elif event.key == pygame.K_r:
-                        self.new_game()
-                    elif event.key == pygame.K_z:
+                        if self.menu_open:
+                            self._close_menu()
+                        else:
+                            self.retry_current_deal()
+                    elif event.key == pygame.K_p:
+                        self.toggle_pause()
+                    elif not self.paused and event.key == pygame.K_z:
                         self.undo()
-                    elif event.key == pygame.K_y:
+                    elif not self.paused and event.key == pygame.K_y:
                         self.redo()
                 elif event.type == pygame.VIDEORESIZE:
-                    # Keep a regular window and re-center board layout on resize.
-                    self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                    self.screen = pygame.display.set_mode(
+                        (event.w, event.h), pygame.RESIZABLE
+                    )
                     self.layout.resize(self.screen.get_size())
+                elif event.type == pygame.MOUSEMOTION:
+                    self._update_menu_hover(event.pos)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.handle_button_click(event.pos):
+                    # Menu open → route to menu handler
+                    if self.menu_open:
+                        self._handle_menu_click(event.pos)
+                        continue
+                    # Menu button click → open menu
+                    sw, sh = self.screen.get_size()
+                    if menu_button_rect(sw, sh).collidepoint(event.pos):
+                        self.menu_open = True
+                        self.drag = None
+                        self.mouse_down_pos = None
+                        continue
+                    if self.paused:
                         continue
                     if self.state.won or self.solver_game_over:
                         continue
-                    # pygame 2 provides event.clicks; fallback to timestamp check.
+                    # Double-click detection
                     is_double = bool(getattr(event, "clicks", 0) >= 2)
                     now = time()
-                    if not is_double and now - self.last_click_at <= DOUBLE_CLICK_SECONDS:
+                    if (
+                        not is_double
+                        and now - self.last_click_at <= DOUBLE_CLICK_SECONDS
+                    ):
                         is_double = True
                     self.last_click_at = now
-
                     if is_double and not self.drop_anim:
                         src_info = self.source_at_pos(event.pos, top_only_tableau=True)
                         if src_info:
                             src, idx = src_info
                             if self.try_auto_move_from_source(src, idx):
                                 continue
-
                     self.mouse_down_pos = event.pos
                     self.try_pick_from_pos(event.pos)
-                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and not self.state.won and not self.solver_game_over:
-                    # Click without drag: try auto-move top card to foundation.
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if self.menu_open:
+                        continue
+                    if self.state.won or self.solver_game_over:
+                        continue
+                    if self.paused:
+                        continue
                     if self.mouse_down_pos and self.drag:
                         dx = abs(event.pos[0] - self.mouse_down_pos[0])
                         dy = abs(event.pos[1] - self.mouse_down_pos[1])
                         if dx <= 4 and dy <= 4 and len(self.drag.cards) == 1:
-                            if self.try_auto_move_from_source(self.drag.src, self.drag.start_index):
+                            if self.try_auto_move_from_source(
+                                self.drag.src, self.drag.start_index
+                            ):
                                 self.drag = None
                                 self.mouse_down_pos = None
                                 continue
@@ -805,4 +1154,3 @@ class FreeCellGame:
 
 def run() -> None:
     FreeCellGame().run()
-

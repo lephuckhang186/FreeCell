@@ -1,4 +1,7 @@
-"""Pure move validation and move application logic."""
+"""
+FreeCell Rule Engine.
+Implements validation logic and state transition rules.
+"""
 
 from __future__ import annotations
 
@@ -88,7 +91,9 @@ def pick_cards(state: GameState, src: PileRef, start_index: int = -1) -> list[Ca
     return []
 
 
-def remove_picked_cards(state: GameState, src: PileRef, start_index: int = -1) -> list[Card]:
+def remove_picked_cards(
+    state: GameState, src: PileRef, start_index: int = -1
+) -> list[Card]:
     """Take cards from source and return them."""
     if src.kind == PileType.TABLEAU:
         col = state.tableau[src.index]
@@ -120,11 +125,16 @@ def push_cards(state: GameState, dst: PileRef, cards: list[Card]) -> None:
         state.foundations[suit].append(cards[0])
 
 
-def validate_move(state: GameState, src: PileRef, dst: PileRef, cards: list[Card]) -> MoveResult:
+def validate_move(
+    state: GameState, src: PileRef, dst: PileRef, cards: list[Card]
+) -> MoveResult:
     if src == dst:
         return MoveResult(False, "Nguon va dich giong nhau.")
     if not cards:
         return MoveResult(False, "Khong co la bai de di chuyen.")
+    # Hard rule: once on foundation, only Undo can bring a card back.
+    if src.kind == PileType.FOUNDATION:
+        return MoveResult(False, "Bai len foundation khong keo xuong duoc (chi Undo).")
 
     if dst.kind == PileType.FREECELL:
         if len(cards) != 1:
@@ -156,7 +166,12 @@ def validate_move(state: GameState, src: PileRef, dst: PileRef, cards: list[Card
     return MoveResult(False, "Khong the dat len cot dich.")
 
 
-def apply_move(state: GameState, src: PileRef, dst: PileRef, start_index: int = -1,) -> tuple[MoveResult, list[Card]]:
+def apply_move(
+    state: GameState,
+    src: PileRef,
+    dst: PileRef,
+    start_index: int = -1,
+) -> tuple[MoveResult, list[Card]]:
     """Validate and apply move atomically. Returns moved cards when successful."""
     cards = pick_cards(state, src, start_index)
     check = validate_move(state, src, dst, cards)
@@ -197,4 +212,3 @@ def undo_move(
 
     # 3. Update win state
     state.won = False
-

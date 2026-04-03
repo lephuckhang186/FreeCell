@@ -1,8 +1,7 @@
-"""Kỹ thuật / cơ sở dùng chung cho BFS, IDS, UCS, A*."""
+"""Shared utilities and logic for FreeCell search algorithms (BFS, IDS, UCS, A*)."""
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 
@@ -17,17 +16,18 @@ from .rules import (
 )
 from .state import GameState
 
-# Bật DEBUG_STATS=True để in thống kê định kỳ; mỗi nhóm solver dùng REPORT_INTERVAL riêng.
+# Set DEBUG_STATS to True for periodic console performance reports.
+# Different reporting intervals are used depending on the algorithm's typical expansion rate.
 DEBUG_STATS = True
-REPORT_INTERVAL_BFS_IDS = 1000  # BFS, IDS (DFS iterative deepening)
-REPORT_INTERVAL_UCS_ASTAR = 100  # UCS, A*
+REPORT_INTERVAL_BFS_IDS = 1000   # BFS/IDS expansion pace.
+REPORT_INTERVAL_UCS_ASTAR = 100  # UCS/A* cost-sorting pace.
 
-# Sentinel: IDS dls() trả về khi bị hủy (UI timeout / cancel event)
+# Sentinel object used by IDS dls() to signal recursion interruption via UI/Cancel events.
 SOLVER_IDS_CANCELLED = object()
 
 
 class MoveCostConfig:
-    """Cấu hình cho move_cost function."""
+    """Configuration for move cost weighting."""
 
     def __init__(self, algorithm: str = "ucs"):
         self.algorithm = algorithm  # 'ucs' hoặc 'astar'
@@ -228,9 +228,7 @@ class FreeCellSolverBase:
                 len(state.foundations.get(s, [])) >= needed_below for s in black_suits
             )
         red_suits = [Suit.DIAMONDS, Suit.HEARTS]
-        return all(
-            len(state.foundations.get(s, [])) >= needed_below for s in red_suits
-        )
+        return all(len(state.foundations.get(s, [])) >= needed_below for s in red_suits)
 
     def _apply_forced_foundations(self, state: GameState) -> tuple[bool, list]:
         any_applied = False
@@ -244,9 +242,9 @@ class FreeCellSolverBase:
                 src = PileRef(PileType.FREECELL, fc_idx)
                 for f_idx in range(4):
                     dst = PileRef(PileType.FOUNDATION, f_idx)
-                    if validate_move(state, src, dst, [card]).ok and self._is_safe_to_foundation(
-                        state, card
-                    ):
+                    if validate_move(
+                        state, src, dst, [card]
+                    ).ok and self._is_safe_to_foundation(state, card):
                         apply_move(state, src, dst, -1)
                         moves_applied.append((src, dst, -1))
                         changed = True
@@ -259,9 +257,9 @@ class FreeCellSolverBase:
                 src = PileRef(PileType.TABLEAU, col_idx)
                 for f_idx in range(4):
                     dst = PileRef(PileType.FOUNDATION, f_idx)
-                    if validate_move(state, src, dst, [card]).ok and self._is_safe_to_foundation(
-                        state, card
-                    ):
+                    if validate_move(
+                        state, src, dst, [card]
+                    ).ok and self._is_safe_to_foundation(state, card):
                         apply_move(state, src, dst, -1)
                         moves_applied.append((src, dst, -1))
                         changed = True
@@ -453,9 +451,7 @@ class FreeCellSolverBase:
                 cost -= reward
             elif src.kind == PileType.FREECELL:
                 occupied_freecell = total_freecell - empty_freecell
-                reward = config.FREECELL_RELEASE_REWARD * (
-                    1 + occupied_freecell * 0.5
-                )
+                reward = config.FREECELL_RELEASE_REWARD * (1 + occupied_freecell * 0.5)
                 cost -= reward
             if self._is_natural_tableau_move(current_state, src, dst, start_index):
                 cost -= config.NATURAL_MOVE_REWARD
@@ -484,7 +480,10 @@ class FreeCellSolverBase:
         top_dst = dst_pile[-1]
         moved_card = src_pile[0]
 
-        return is_red(top_dst.suit) != is_red(moved_card.suit) and top_dst.rank == moved_card.rank + 1
+        return (
+            is_red(top_dst.suit) != is_red(moved_card.suit)
+            and top_dst.rank == moved_card.rank + 1
+        )
 
     def _is_useless_move(
         self, state: GameState, src: PileRef, dst: PileRef, start_index: int
@@ -518,7 +517,10 @@ class FreeCellSolverBase:
 
                 if i < len(col) - 1:
                     next_card = col[i + 1]
-                    if is_red(card.suit) == is_red(next_card.suit) or next_card.rank != card.rank - 1:
+                    if (
+                        is_red(card.suit) == is_red(next_card.suit)
+                        or next_card.rank != card.rank - 1
+                    ):
                         h_score += 2
 
                 foundation_pile = state.foundations.get(card.suit, [])

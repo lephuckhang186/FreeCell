@@ -1,4 +1,7 @@
-"""Data models and utility helpers for cards and piles."""
+"""
+FreeCell Core Models.
+Defines base data structures for Suits, Ranks, and Cards.
+"""
 
 from __future__ import annotations
 
@@ -49,4 +52,3 @@ class Card:
     @property
     def label(self) -> str:
         return f"{RANK_LABELS[self.rank]}{SUIT_SYMBOLS[self.suit]}"
-

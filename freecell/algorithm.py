@@ -1,8 +1,9 @@
 """
-Solver tích hợp: ghép BFS, IDS, UCS, A* từ các module riêng.
+Solver aggregation module.
 
-- `skill.py`: nền chung (hash, move gen, heuristic, cost, auto-foundation, …)
-- `bfs.py`, `ids.py`, `ucs.py`, `astar.py`: từng thuật toán
+This module combines various search algorithms (BFS, IDS, UCS, A*) into a single
+unified FreeCellSolver class. It leverages mixins and a common base logic
+defined in `skill.py` to provide a consistent interface for the UI.
 """
 
 from __future__ import annotations
@@ -27,7 +28,14 @@ class FreeCellSolver(
     AstarSolverMixin,
     FreeCellSolverBase,
 ):
-    """Gộp BFS, IDS, UCS, A*; cùng chung cơ sở trong `FreeCellSolverBase` (skill.py)."""
+    """
+    Unified FreeCell Solver.
+
+    Combines multiple search strategies (BFS, IDS, UCS, A*) into one class.
+    Each algorithm is provided via a Mixin class. The common logic for
+    move generation, state hashing, and auto-foundation moves is inherited
+    from `FreeCellSolverBase`.
+    """
 
     pass
 
