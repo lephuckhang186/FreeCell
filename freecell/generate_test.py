@@ -8,9 +8,9 @@ LEVEL_CONFIG = {
     # - MOVES: Shuffle count.
     # - NOISE: Probability of introducing non-rule-abiding card movements.
     # - MIN_SEQ: Target tableau sequence quality ratio.
-    1: (140, 2, 0.65, 0.03),
-    2: (340, 3, 0.55, 0.08),
-    3: (700, 4, 0.45, 0.14),
+    1: (140, 1, 0.65, 0.03),
+    2: (340, 2, 0.55, 0.08),
+    3: (700, 3, 0.45, 0.10),
     4: (850, 4, 0.42, 0.12),
     5: (1100, 5, 0.33, 0.18),
     6: (1700, 6, 0.27, 0.22),

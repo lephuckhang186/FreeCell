@@ -325,6 +325,9 @@ class FreeCellGame:
                 self.solver_game_over = False
 
                 self.state = new_state
+                self._retry_state = self.state.clone()
+                self._retry_category = "Loaded"
+                self._retry_level = -1
                 self.moves = 0
                 self.score = 0
                 self.elapsed = 0.0
@@ -423,6 +426,61 @@ class FreeCellGame:
         self.moves = 0
         self.paused = False
         self._close_menu()
+
+    def save_current_testcase(self) -> None:
+        """Save the initial board state (_retry_state) to testcase/testcase{num}.txt."""
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        testcase_dir = os.path.join(base_dir, "testcase")
+        if not os.path.exists(testcase_dir):
+            os.makedirs(testcase_dir)
+            
+        max_num = 0
+        for fname in os.listdir(testcase_dir):
+            if fname.startswith("testcase") and fname.endswith(".txt"):
+                num_part = fname[len("testcase"):-4]
+                if num_part.isdigit():
+                    max_num = max(max_num, int(num_part))
+        next_num = max_num + 1
+        filepath = os.path.join(testcase_dir, f"testcase{next_num}.txt")
+        
+        state_to_save = self._retry_state if self._retry_state else self.state
+        
+        def card_string(c: Card) -> str:
+            r_str = "T" if c.rank == 10 else ("A" if c.rank == 1 else ("J" if c.rank == 11 else ("Q" if c.rank == 12 else ("K" if c.rank == 13 else str(c.rank)))))
+            return f"{r_str}{c.suit.value}"
+
+        lines = []
+        lines.append("[FOUNDATION]")
+        for suit in (Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES):
+            pile = state_to_save.foundations[suit]
+            if pile:
+                lines.append(f"{suit.value}: {card_string(pile[-1])}")
+            else:
+                lines.append(f"{suit.value}: empty")
+                
+        lines.append("")
+        lines.append("[FREECELL]")
+        for i, c in enumerate(state_to_save.free_cells):
+            if c:
+                lines.append(f"{i}: {card_string(c)}")
+            else:
+                lines.append(f"{i}: empty")
+                
+        lines.append("")
+        lines.append("[TABLEAU]")
+        for col in state_to_save.tableau:
+            if col:
+                lines.append(" ".join(card_string(c) for c in col))
+            else:
+                lines.append("empty")
+                
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            self.set_status(f"Saved to testcase{next_num}.txt", 3.0)
+        except Exception as e:
+            self.set_status(f"Failed to save: {e}", 3.0)
 
     def add_score(self, delta: int) -> None:
         """Add delta to score, clamped to >= 0."""
@@ -1007,7 +1065,7 @@ class FreeCellGame:
                 ]
                 if "depth_reached" in stats:
                     lines.append(f"Depth Reached: {stats['depth_reached']}")
-                sy = self.screen.get_height() // 2 + 60
+                sy = self.screen.get_height() // 2 + 110
                 for line in lines:
                     text_surface = font.render(line, True, (255, 255, 255))
                     tw = text_surface.get_width()
@@ -1086,6 +1144,11 @@ class FreeCellGame:
                         self.undo()
                     elif not self.paused and event.key == pygame.K_y:
                         self.redo()
+                    elif event.key == pygame.K_s:
+                        if self.menu_open:
+                            self._close_menu()
+                        else:
+                            self.save_current_testcase()
                 elif event.type == pygame.VIDEORESIZE:
                     self.screen = pygame.display.set_mode(
                         (event.w, event.h), pygame.RESIZABLE
