@@ -125,6 +125,9 @@ def validate_move(state: GameState, src: PileRef, dst: PileRef, cards: list[Card
         return MoveResult(False, "Nguon va dich giong nhau.")
     if not cards:
         return MoveResult(False, "Khong co la bai de di chuyen.")
+    # Hard rule: once on foundation, only Undo can bring a card back.
+    if src.kind == PileType.FOUNDATION:
+        return MoveResult(False, "Bai len foundation khong keo xuong duoc (chi Undo).")
 
     if dst.kind == PileType.FREECELL:
         if len(cards) != 1:

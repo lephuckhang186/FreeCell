@@ -71,38 +71,9 @@ def get_card_from_str(card_str: str) -> Card:
     return Card(suit=suit, rank=rank)
 
 
-def generate_state_testcase(testcase_num: int = 1) -> GameState:
-    """Load a specific testcase from the testcase folder and generate GameState.
-    Supports a custom structured format for setting up endgame states.
-    Format:
-    [FOUNDATION]
-    C: KC
-    S: KS
-    D: QD
-    H: JH
-    
-    [FREECELL]
-    0: AD
-    1: empty
-    
-    [TABLEAU]
-    KH QH
-    KD
-    """
+def _parse_testcase_lines(lines: list[str]) -> GameState:
+    """Parse testcase file content into GameState."""
     state = GameState()
-    
-    # Locate the testcase file
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    file_path = os.path.join(base_dir, "testcase", f"testcase{testcase_num}.txt")
-    
-    if not os.path.exists(file_path):
-        print(f"Khong tim thay {file_path}, dang fall back ve default deal.")
-        return deal_new_game()
-        
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = [line.strip() for line in f.readlines()]
-        
-    # Check if it uses the new detailed format
     if any("[FOUNDATION]" in line for line in lines):
         current_section = None
         for line in lines:
@@ -111,40 +82,32 @@ def generate_state_testcase(testcase_num: int = 1) -> GameState:
             if line.startswith("["):
                 current_section = line
                 continue
-                
+
             if current_section == "[FOUNDATION]":
-                # Format: C: KC  -> meaning Clubs has cards from AC up to KC
                 parts = line.split(":")
                 if len(parts) == 2:
-                    suit_char = parts[0].strip()
                     top_card_str = parts[1].strip()
                     if top_card_str.lower() != "empty" and top_card_str:
                         top_card = get_card_from_str(top_card_str)
                         suit = top_card.suit
                         state.foundations[suit] = [Card(suit, r) for r in range(1, top_card.rank + 1)]
-                        
+
             elif current_section == "[FREECELL]":
-                # Format: 0: AD  or 1: empty
                 parts = line.split(":")
                 if len(parts) == 2:
                     idx = int(parts[0].strip())
                     card_str = parts[1].strip()
                     if card_str.lower() != "empty" and card_str:
                         state.free_cells[idx] = get_card_from_str(card_str)
-                        
+
             elif current_section == "[TABLEAU]":
-                # Each line is a column, top to bottom
-                # Format: KH QH
                 if line.lower() != "empty":
                     cards = [get_card_from_str(c) for c in line.split()]
-                    # find first empty column to put them in
                     for i in range(8):
                         if not state.tableau[i]:
                             state.tableau[i] = cards
                             break
     else:
-        # Fallback to the old simple tableau-only matrix parser
-        row_idx = 0
         for line in lines:
             if not line:
                 continue
@@ -152,8 +115,26 @@ def generate_state_testcase(testcase_num: int = 1) -> GameState:
             for col_idx, card_str in enumerate(cards):
                 card = get_card_from_str(card_str)
                 state.tableau[col_idx].append(card)
-            
+
     return state
+
+
+def load_game_from_testcase_file(relative_path: str) -> GameState:
+    """Load ``relative_path`` under the project root (use ``/`` in path)."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    file_path = os.path.normpath(os.path.join(base_dir, relative_path.replace("/", os.sep)))
+    if not os.path.exists(file_path):
+        print(f"Khong tim thay {file_path}, dang fall back ve default deal.")
+        return deal_new_game()
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f.readlines()]
+    return _parse_testcase_lines(lines)
+
+
+def generate_state_testcase(testcase_num: int = 1) -> GameState:
+    """Load ``testcase/testcase{N}.txt`` (tests / legacy)."""
+    rel = os.path.join("testcase", f"testcase{testcase_num}.txt")
+    return load_game_from_testcase_file(rel)
 
 
 def deal_new_game(seed: int | None = None) -> GameState:
