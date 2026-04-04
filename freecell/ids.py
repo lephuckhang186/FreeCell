@@ -101,6 +101,7 @@ class IdsSolverMixin:
                 "path": init_auto,
                 "search_time": time.time() - start_time,
                 "expanded_nodes": expanded_nodes,
+                "search_length": len(init_auto),
             }
 
         for d_limit in range(1, max_depth + 1):

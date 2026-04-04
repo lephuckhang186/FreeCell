@@ -503,8 +503,15 @@ class FreeCellGame:
         self.score = max(0, self.score + delta)
 
     def _run_solver_task(self, label: str, state_copy: GameState) -> None:
+        import tracemalloc
+        import time
+        from .skill import FreeCellSolverBase
+
+        tracemalloc.start()
+
         solver = FreeCellSolver(state_copy, self._solver_cancel_event)
         stats = None
+        start_time = time.time()
         try:
             if label == "BFS":
                 stats = solver.bfs_solving()
@@ -514,8 +521,23 @@ class FreeCellGame:
                 stats = solver.ucs_solving()
             elif label == "A*":
                 stats = solver.astar_solving()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[{label}] Exception: {e}")
+        finally:
+            current_mem, peak_mem = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            elapsed_time = time.time() - start_time
+            if stats is not None:
+                stats["memory_usage_bytes"] = peak_mem
+
+            # Log to terminal
+            print(f"[DEBUG] SOLVER {label} COMPLETED")
+            print(f"Peak Memory: {peak_mem} bytes")
+            print(f"Time Taken: {elapsed_time:.2f} s")
+            if stats:
+                print(f"Path Found: {'Yes' if stats.get('path') else 'No'}")
+                print(f"Expanded Nodes: {stats.get('expanded_nodes', 0)}")
+
         self._solver_result = stats if stats is not None else {}
 
     def run_solver(self, label: str) -> None:
