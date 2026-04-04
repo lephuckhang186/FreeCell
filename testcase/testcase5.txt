@@ -1,0 +1,21 @@
+[FOUNDATION]
+C: 5C
+S: 5S
+D: 5D
+H: 5H
+
+[FREECELL]
+0: empty
+1: empty
+2: empty
+3: empty
+
+[TABLEAU]
+9H 8S 6S 6C
+QH QS TS JS
+KC 7D JH 7S
+QD 9S 6D 7C
+JD 7H KD 8C
+TD KH 9D 8H
+QC JC TC TH
+6H 9C 8D KS
