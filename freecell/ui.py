@@ -788,6 +788,7 @@ class Renderer:
         self.screen.blit(overlay, (0, 0))
         txt = self.font_win.render("YOU WIN!", True, COLOR_WIN)
         sub = self.font_title.render("Press R for a new deal", True, COLOR_TEXT)
+        sub2 = self.font_title.render("Press S for save test case", True, COLOR_TEXT)
         self.screen.blit(
             txt,
             txt.get_rect(
@@ -803,6 +804,15 @@ class Renderer:
                 center=(
                     self.screen.get_width() // 2,
                     self.screen.get_height() // 2 + 24,
+                )
+            ),
+        )
+        self.screen.blit(
+            sub2,
+            sub2.get_rect(
+                center=(
+                    self.screen.get_width() // 2,
+                    self.screen.get_height() // 2 + 64,
                 )
             ),
         )
